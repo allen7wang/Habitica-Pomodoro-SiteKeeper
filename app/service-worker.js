@@ -873,6 +873,8 @@ function ActivatePomodoro() {
 // ------------- Pomodoro Timer ---------------------------
 
 var timerInterval; //Used for timer interval in startTimer() function.
+var badgeDisplayMode = 'timer'; // 'timer' or 'count'
+var badgeTimerInterval = null;
 
 /**
  * Start Timer: 
@@ -903,6 +905,45 @@ function startTimer(duration, duringTimerFunction, endTimerFunction) {
         }
 
     }, 1000);
+
+    // Start badge alternating display
+    startBadgeAlternating();
+}
+
+// Alternate badge display between timer and count
+function startBadgeAlternating() {
+    clearInterval(badgeTimerInterval);
+    badgeDisplayMode = 'timer';
+    
+    badgeTimerInterval = setInterval(function() {
+        if (!Vars.TimerRunnig) {
+            clearInterval(badgeTimerInterval);
+            return;
+        }
+        
+        // Toggle display mode every 2 seconds
+        badgeDisplayMode = badgeDisplayMode === 'timer' ? 'count' : 'timer';
+        updateBadgeDisplay();
+    }, 2000);
+}
+
+// Update badge based on current display mode
+function updateBadgeDisplay() {
+    if (!Vars.TimerRunnig) return;
+    
+    if (badgeDisplayMode === 'timer') {
+        // Show countdown
+        var color = Vars.onBreak ? (Vars.onBreakExtension ? "red" : "blue") : "green";
+        chrome.action.setBadgeBackgroundColor({ color: color });
+        var timeString = BROWSER === "Mozilla Firefox" ? shortTimeString(Vars.Timer) : Vars.Timer;
+        chrome.action.setBadgeText({ text: timeString });
+    } else {
+        // Show completed/total count (compact format)
+        var color = Vars.onBreak ? (Vars.onBreakExtension ? "red" : "blue") : "green";
+        chrome.action.setBadgeBackgroundColor({ color: color });
+        var countText = Vars.PomoSetCounter + '/' + Vars.UserData.PomoSetNum;
+        chrome.action.setBadgeText({ text: countText });
+    }
 }
 
 
@@ -920,14 +961,8 @@ function startPomodoro() {
 
 //runs during pomodoro session
 function duringPomodoro() {
-    //Show time on icon badge 
-    chrome.action.setBadgeBackgroundColor({
-        color: "green"
-    });
-    var timeString = BROWSER === "Mozilla Firefox" ? shortTimeString(Vars.Timer) : Vars.Timer;
-    chrome.action.setBadgeText({
-        text: timeString
-    });
+    //Badge updated by alternating display
+    updateBadgeDisplay();
     //Block current tab if necessary
     CurrentTab(blockSiteOverlay);
     playSound(Vars.UserData.ambientSound, Vars.UserData.ambientSoundVolume, true);
@@ -1048,14 +1083,8 @@ function manualBreak() {
 
 //runs during Break session
 function duringBreak() {
-    //Show time on icon badge 
-    chrome.action.setBadgeBackgroundColor({
-        color: "blue"
-    });
-    var timeString = BROWSER === "Mozilla Firefox" ? shortTimeString(Vars.Timer) : Vars.Timer;
-    chrome.action.setBadgeText({
-        text: timeString
-    });
+    //Badge updated by alternating display
+    updateBadgeDisplay();
 }
 
 //runs when Break session ends
@@ -1101,13 +1130,8 @@ function startBreakExtension(duration) {
 
 //runs during Break session
 function duringBreakExtension() {
-    //Show time on icon badge 
-    chrome.action.setBadgeBackgroundColor({
-        color: "red"
-    });
-    chrome.action.setBadgeText({
-        text: Vars.Timer
-    });
+    //Badge updated by alternating display
+    updateBadgeDisplay();
 }
 
 //runs when pomodoro is interupted (stoped before timer ends/break extension over)
@@ -1147,6 +1171,7 @@ async function pomodoroInterupted(breakPomoStreak) {
 function stopTimer() {
 
     clearInterval(timerInterval);
+    clearInterval(badgeTimerInterval); // Stop badge alternating
     Vars.Timer = "00:00";
     chrome.action.setBadgeText({
         text: ''
