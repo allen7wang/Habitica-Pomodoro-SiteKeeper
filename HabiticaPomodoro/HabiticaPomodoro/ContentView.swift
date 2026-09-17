@@ -111,13 +111,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return
         }
 
+        let settings = SettingsManager.shared.settings
+
         if badgeDisplayMode == .timer {
             // Show countdown
             button.title = engine.timerString
         } else {
-            // Show completed/total count
-            let count = "\(engine.pomoSetCounter)/\(engine.settings.pomoSetNum)"
-            button.title = count
+            // Show progress based on mode
+            if settings.enableBlockMode {
+                // Block mode: show block progress
+                let bp = BlockProgressManager.shared.blockProgress
+                let (completed, total) = bp.getBlockProgress(pomoCount: settings.blockPomoCount)
+                button.title = "B\(bp.currentBlockIndex + 1):\(completed)/\(total)"
+            } else {
+                // Regular mode: show pomo set progress
+                button.title = "\(engine.pomoSetCounter)/\(engine.settings.pomoSetNum)"
+            }
         }
 
         // Set color based on phase
@@ -156,6 +165,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 // MARK: - Timer View (main window)
 struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
+    @ObservedObject var blockManager = BlockProgressManager.shared
 
     var body: some View {
         VStack(spacing: 16) {
@@ -170,9 +180,24 @@ struct TimerView: View {
                     Text(engine.timerString)
                         .font(.system(.title, design: .monospaced).bold())
                         .foregroundColor(.white)
-                    Text("\(engine.pomoSetCounter)/\(engine.settings.pomoSetNum)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
+
+                    if engine.settings.enableBlockMode {
+                        // Block mode progress
+                        let bp = BlockProgressManager.shared.blockProgress
+                        let (completed, total) = bp.getBlockProgress(pomoCount: engine.settings.blockPomoCount)
+                        Text("B\(bp.currentBlockIndex + 1): \(completed)/\(total)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                        Text(bp.getBlockGoal(goals: engine.settings.blockGoals))
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
+                    } else {
+                        // Regular mode progress
+                        Text("\(engine.pomoSetCounter)/\(engine.settings.pomoSetNum)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
                 }
             }
             .onTapGesture { engine.activate() }
@@ -183,6 +208,21 @@ struct TimerView: View {
                     .foregroundColor(.green)
                 Text("Today: \(engine.todayPomodoros) pomodoros")
                     .font(.subheadline)
+            }
+
+            // Block mode: show progress dots
+            if engine.settings.enableBlockMode {
+                let bp = BlockProgressManager.shared.blockProgress
+                let (completed, total) = bp.getBlockProgress(pomoCount: engine.settings.blockPomoCount)
+
+                HStack(spacing: 4) {
+                    ForEach(0..<total, id: \.self) { index in
+                        Circle()
+                            .fill(index < completed ? Color.green : Color.gray.opacity(0.3))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .padding(.vertical, 4)
             }
 
             // Action buttons row
@@ -295,9 +335,10 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             timerSettingsTab.tabItem { Label("Timer", systemImage: "timer") }
+            blockSettingsTab.tabItem { Label("Blocks", systemImage: "square.grid.3x3") }
             habiticaSettingsTab.tabItem { Label("Habitica", systemImage: "link") }
         }
-        .frame(width: 420, height: 560)
+        .frame(width: 480, height: 600)
     }
 
     var timerSettingsTab: some View {
@@ -332,6 +373,66 @@ struct SettingsView: View {
                 Text("HotKey: ⌥⇧P (Alt+Shift+P)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+            .padding()
+        }
+    }
+
+    var blockSettingsTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Group {
+                    Toggle("Enable Block Mode", isOn: $sm.settings.enableBlockMode)
+
+                    if sm.settings.enableBlockMode {
+                        Divider()
+
+                        Text("Block Settings").font(.headline)
+                        stepperRow("Blocks per day", value: $sm.settings.blockCount, range: 1...24, suffix: "blocks")
+                        stepperRow("Pomodoros per block", value: $sm.settings.blockPomoCount, range: 1...12, suffix: "pomodoros")
+
+                        Divider()
+
+                        Text("Block Goals").font(.headline)
+                        Text("Set goals for each block (optional)").font(.caption).foregroundColor(.secondary)
+
+                        ForEach(0..<sm.settings.blockCount, id: \.self) { index in
+                            let goalIndex = index
+                            let goalText: Binding<String> = Binding(
+                                get: {
+                                    if goalIndex < sm.settings.blockGoals.count {
+                                        return sm.settings.blockGoals[goalIndex]
+                                    }
+                                    return ""
+                                },
+                                set: { newValue in
+                                    if goalIndex < sm.settings.blockGoals.count {
+                                        sm.settings.blockGoals[goalIndex] = newValue
+                                    } else {
+                                        sm.settings.blockGoals.append(newValue)
+                                    }
+                                }
+                            )
+                            Text("Block \(index + 1) Goal:")
+                                .font(.caption)
+                            TextField("Optional goal for block \(index + 1)", text: goalText)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Divider()
+
+                        Button("Reset Block Progress") {
+                            BlockProgressManager.shared.blockProgress.resetBlock()
+                            BlockProgressManager.shared.saveProgress()
+                        }
+                        .foregroundColor(.orange)
+
+                        Button("Clear Block History") {
+                            BlockProgressManager.shared.clearHistory()
+                        }
+                        .foregroundColor(.red)
+                    }
+                }
             }
             .padding()
         }

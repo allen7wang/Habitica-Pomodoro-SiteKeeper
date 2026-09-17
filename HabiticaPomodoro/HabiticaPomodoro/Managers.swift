@@ -28,6 +28,107 @@ class SettingsManager: ObservableObject {
     }
 }
 
+// MARK: - Block Progress Manager (块进度管理)
+class BlockProgressManager: ObservableObject {
+    static let shared = BlockProgressManager()
+
+    @Published var blockProgress: BlockProgress
+    @Published var blockHistory: BlockHistory
+
+    private let progressKey = "habitica_pomodoro_block_progress"
+    private let historyKey = "habitica_pomodoro_block_history"
+
+    init() {
+        if let data = UserDefaults.standard.data(forKey: progressKey),
+           let decoded = try? JSONDecoder().decode(BlockProgress.self, from: data) {
+            blockProgress = decoded
+        } else {
+            blockProgress = BlockProgress()
+        }
+
+        if let data = UserDefaults.standard.data(forKey: historyKey),
+           let decoded = try? JSONDecoder().decode(BlockHistory.self, from: data) {
+            blockHistory = decoded
+        } else {
+            blockHistory = [:]
+        }
+
+        // 检查是否需要重置新一天的块
+        resetIfNeeded()
+    }
+
+    func saveProgress() {
+        if let data = try? JSONEncoder().encode(blockProgress) {
+            UserDefaults.standard.set(data, forKey: progressKey)
+        }
+    }
+
+    func saveHistory() {
+        if let data = try? JSONEncoder().encode(blockHistory) {
+            UserDefaults.standard.set(data, forKey: historyKey)
+        }
+    }
+
+    private func todayKey() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
+    // 检查是否需要重置新一天的块
+    private func resetIfNeeded() {
+        let today = todayKey()
+        if let lastEntry = getLatestBlockEntry(),
+           lastEntry.date != today {
+            // 新的一天，重置块进度
+            blockProgress.resetBlock()
+            saveProgress()
+        }
+    }
+
+    private func getLatestBlockEntry() -> BlockHistoryEntry? {
+        guard !blockHistory.isEmpty else { return nil }
+        let sortedDates = blockHistory.keys.sorted()
+        if let lastDate = sortedDates.last,
+           let entries = blockHistory[lastDate],
+           let lastEntry = entries.last {
+            return lastEntry
+        }
+        return nil
+    }
+
+    // 记录块完成
+    func recordBlockComplete(settings: UserSettings) {
+        let entry = BlockHistoryEntry(
+            date: todayKey(),
+            blockIndex: blockProgress.currentBlockIndex,
+            pomodoros: blockProgress.blockPomoCounter,
+            isComplete: true,
+            completedAt: Date()
+        )
+
+        let today = todayKey()
+        if var entries = blockHistory[today] {
+            entries.append(entry)
+            blockHistory[today] = entries
+        } else {
+            blockHistory[today] = [entry]
+        }
+        saveHistory()
+    }
+
+    // 清空历史
+    func clearHistory() {
+        blockHistory = [:]
+        saveHistory()
+    }
+
+    // 获取今天的块历史
+    func getTodayBlocks() -> [BlockHistoryEntry] {
+        return blockHistory[todayKey()] ?? []
+    }
+}
+
 // MARK: - Histogram Manager
 class HistogramManager: ObservableObject {
     static let shared = HistogramManager()

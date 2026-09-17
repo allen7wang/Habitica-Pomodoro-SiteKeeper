@@ -31,7 +31,62 @@ struct UserSettings: Codable {
     var breakEndSoundVolume: Double = 0.5
     var ambientSoundVolume: Double = 0.5
     var developerServerUrl: String = ""
+
+    // MARK: - Block Settings (时间块功能)
+    var enableBlockMode: Bool = false // 启用时间块模式
+    var blockCount: Int = 8 // 每天分几块（默认 8 块）
+    var blockPomoCount: Int = 6 // 每块几个 pomo（默认 6 个）
+    var blockGoals: [String] = [] // 每块的目标（可选）
 }
+
+// MARK: - Block Progress (当前块进度)
+struct BlockProgress: Codable {
+    var currentBlockIndex: Int = 0 // 当前块索引 (0-based)
+    var blockPomoCounter: Int = 0 // 当前块内完成 pomo 数
+    var blockStartTime: Date? = nil // 块开始时间
+
+    func getBlockGoal(goals: [String]) -> String {
+        if currentBlockIndex < goals.count && !goals[currentBlockIndex].isEmpty {
+            return goals[currentBlockIndex]
+        }
+        return "Block \(currentBlockIndex + 1)"
+    }
+
+    func getBlockProgress(pomoCount: Int) -> (completed: Int, total: Int) {
+        return (blockPomoCounter, pomoCount)
+    }
+
+    mutating func incrementBlockPomo() {
+        blockPomoCounter += 1
+    }
+
+    mutating func moveToNextBlock() {
+        currentBlockIndex += 1
+        blockPomoCounter = 0
+        blockStartTime = Date()
+    }
+
+    mutating func resetBlock() {
+        currentBlockIndex = 0
+        blockPomoCounter = 0
+        blockStartTime = nil
+    }
+
+    func isBlockComplete(pomoCount: Int) -> Bool {
+        return blockPomoCounter >= pomoCount
+    }
+}
+
+// MARK: - Block History (历史块记录)
+struct BlockHistoryEntry: Codable {
+    var date: String // yyyy-MM-dd
+    var blockIndex: Int
+    var pomodoros: Int
+    var isComplete: Bool
+    var completedAt: Date?
+}
+
+typealias BlockHistory = [String: [BlockHistoryEntry]] // date -> entries
 
 // MARK: - Histogram (daily pomodoro counts)
 struct DayHistogram: Codable {

@@ -96,6 +96,30 @@ class PomodoroEngine: ObservableObject {
         var msg = "Pomodoro ended.\nYou have done \(histogramManager.getToday()?.pomodoros ?? 0) today!"
         let setComplete = pomoSetCounter >= settings.pomoSetNum - 1
 
+        // MARK: - Block Mode Logic
+        if settings.enableBlockMode {
+            BlockProgressManager.shared.blockProgress.incrementBlockPomo()
+            let bp = BlockProgressManager.shared.blockProgress
+            let (completed, total) = bp.getBlockProgress(pomoCount: settings.blockPomoCount)
+
+            if completed >= total {
+                // Block Complete
+                BlockProgressManager.shared.recordBlockComplete(settings: settings)
+                let goal = bp.getBlockGoal(goals: settings.blockGoals)
+                msg = "Block \(bp.currentBlockIndex + 1) Complete!\nGoal: \(goal)"
+
+                // Move to next block
+                BlockProgressManager.shared.blockProgress.moveToNextBlock()
+                BlockProgressManager.shared.saveProgress()
+            } else {
+                // Still working on current block
+                let goal = bp.getBlockGoal(goals: settings.blockGoals)
+                msg = "Pomodoro ended.\nCurrent Block (\(bp.currentBlockIndex + 1)): \(completed)/\(total)\nGoal: \(goal)"
+            }
+            // Notify badge to update
+            NotificationCenter.default.post(name: .badgeUpdate, object: nil)
+        }
+
         if settings.pomoHabitPlus || (setComplete && settings.pomoSetHabitPlus) {
             await api.fetchUserData(settings: settings, silent: true)
             let habitId = setComplete && settings.pomoSetHabitPlus ? pomodoroSetTaskId : pomodoroTaskId
@@ -103,7 +127,9 @@ class PomodoroEngine: ObservableObject {
                 let deltaGold = (result["gp"] ?? 0) - api.monies
                 let deltaExp = (result["exp"] ?? 0) - api.exp
                 let expText = deltaExp < 0 ? "You leveled up!" : "You Earned Exp: +\(String(format: "%.2f", deltaExp))"
-                msg = "You Earned Gold: +\(String(format: "%.2f", deltaGold))\n\(expText)"
+                if !settings.enableBlockMode {
+                    msg = "You Earned Gold: +\(String(format: "%.2f", deltaGold))\n\(expText)"
+                }
                 await api.fetchUserData(settings: settings, silent: true)
                 await MainActor.run {
                     self.habiticaMonies = api.monies
