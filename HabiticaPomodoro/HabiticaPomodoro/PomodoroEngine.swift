@@ -108,7 +108,15 @@ class PomodoroEngine: ObservableObject {
                 // Block Complete
                 BlockProgressManager.shared.recordBlockComplete(settings: settings)
                 let goal = bp.getBlockGoal(goals: settings.blockGoals)
-                msg = "Block \(bp.currentBlockIndex + 1) Complete!\nGoal: \(goal)"
+                let blockIdx = bp.currentBlockIndex
+                
+                // 发送块奖励
+                await BlockRewardManager.shared.sendBlockReward(settings: settings, blockIndex: blockIdx, blockGoal: goal)
+                
+                // 获取休息建议
+                let breakSuggestion = BlockRewardManager.shared.suggestBreakType(settings: settings, blockIndex: blockIdx)
+                
+                msg = "Block \(blockIdx + 1) Complete! 🎉\nGoal: \(goal.isEmpty ? "No goal" : goal)\n\n\(breakSuggestion)"
 
                 // 不再自动切换块，让时间决定块索引
                 BlockProgressManager.shared.saveProgress()

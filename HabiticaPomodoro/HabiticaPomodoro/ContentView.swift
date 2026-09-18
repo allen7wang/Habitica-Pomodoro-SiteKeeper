@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import UniformTypeIdentifiers
 
 // MARK: - Main App
 @main
@@ -333,6 +334,7 @@ struct SettingsView: View {
             timerSettingsTab.tabItem { Label("Timer", systemImage: "timer") }
             blockSettingsTab.tabItem { Label("Blocks", systemImage: "square.grid.3x3") }
             habiticaSettingsTab.tabItem { Label("Habitica", systemImage: "link") }
+            dataSettingsTab.tabItem { Label("Data", systemImage: "doc") }
         }
         .frame(width: 480, height: 600)
     }
@@ -542,6 +544,89 @@ struct SettingsView: View {
                 }
             }
             .padding()
+        }
+    }
+
+    var dataSettingsTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Export/Import Data").font(.headline)
+                
+                Button("Export Block History") {
+                    exportBlockHistory()
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button("Import Block History") {
+                    importBlockHistory()
+                }
+                .buttonStyle(.bordered)
+                
+                Divider()
+                
+                Text("Block History").font(.headline)
+                Text("Days: \(BlockProgressManager.shared.blockHistory.count)")
+                
+                let sortedDates = BlockProgressManager.shared.blockHistory.keys.sorted().reversed()
+                ForEach(Array(sortedDates.prefix(5)), id: \.self) { date in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(date)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if let entries = BlockProgressManager.shared.blockHistory[date] {
+                            Text("Entries: \(entries.count)")
+                                .font(.caption2)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                
+                if BlockProgressManager.shared.blockHistory.count > 5 {
+                    Text("... and \(BlockProgressManager.shared.blockHistory.count - 5) more days")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private func exportBlockHistory() {
+        let manager = BlockProgressManager.shared
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        
+        do {
+            let data = try encoder.encode(manager.blockHistory)
+            let savePanel = NSSavePanel()
+            savePanel.allowedContentTypes = [.json]
+            savePanel.nameFieldStringValue = "block_history_\(Date().ISO8601Format()).json"
+            savePanel.begin { result in
+                if result == .OK, let url = savePanel.url {
+                    try? data.write(to: url)
+                }
+            }
+        } catch {
+            print("Export failed: \(error)")
+        }
+    }
+    
+    private func importBlockHistory() {
+        let openPanel = NSOpenPanel()
+        openPanel.allowedContentTypes = [.json]
+        openPanel.begin { result in
+            if result == .OK, let url = openPanel.url {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let decoder = JSONDecoder()
+                    let history = try decoder.decode([String: [BlockHistoryEntry]].self, from: data)
+                    BlockProgressManager.shared.blockHistory = history
+                    BlockProgressManager.shared.saveDailyBlocks()
+                    print("Imported \(history.count) days of data")
+                } catch {
+                    print("Import failed: \(error)")
+                }
+            }
         }
     }
 

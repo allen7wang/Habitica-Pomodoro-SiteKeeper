@@ -38,6 +38,11 @@ struct UserSettings: Codable {
     var blockPomoCount: Int = 6 // 每块几个 pomo（默认 6 个）
     var blockGoals: [String] = [] // 每块的目标（可选）
     var blockTimeRanges: [BlockTimeRange] = [] // 每块的时间范围（如 4:00-7:00）
+    var blockTasks: [[BlockTask]] = [] // 每块的任务列表
+    var blockRewardEnabled: Bool = true // 块完成后 Habitica 奖励
+    var blockSprintReminder: Bool = true // 块进度 4/6 时提醒冲刺
+    var blockStartReminder: Bool = true // 块开始前 5 分钟提醒
+    var blockReminderMinutes: Int = 5 // 块开始前提醒分钟数
 
     init() {
         // 初始化默认块时间范围（4:00 开始，每块 3 小时）
@@ -51,6 +56,9 @@ struct UserSettings: Codable {
             BlockTimeRange(startHour: 22, startMinute: 0, endHour: 1, endMinute: 0),   // 22:00-01:00
             BlockTimeRange(startHour: 1, startMinute: 0, endHour: 4, endMinute: 0),    // 01:00-04:00
         ]
+        
+        // 初始化默认块任务列表
+        blockTasks = Array(repeating: [], count: 8)
     }
 }
 
@@ -126,6 +134,20 @@ struct BlockProgress: Codable {
     func isBlockComplete(pomoCount: Int) -> Bool {
         return blockPomoCounter >= pomoCount
     }
+}
+
+// MARK: - Block Task (块内的任务)
+struct BlockTask: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var title: String
+    var isCompleted: Bool = false
+    var estimatedPomo: Int = 1 // 预计需要几个 pomo
+}
+
+// MARK: - Daily Block History (每日块历史)
+struct DailyBlockHistory: Codable {
+    var date: String // yyyy-MM-dd
+    var blocks: [BlockHistoryEntry]
 }
 
 // MARK: - Block History (历史块记录)
