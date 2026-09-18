@@ -267,7 +267,7 @@ struct TimerView: View {
             // Quick settings link
             HStack(spacing: 12) {
                 Button("Settings") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    showSettings()
                 }
                 Button("History") {
                     showHistoryWindow()
@@ -278,7 +278,7 @@ struct TimerView: View {
             Spacer()
         }
         .padding(24)
-        .frame(width: 360, height: 420)
+        .frame(width: 400, height: 520)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -637,21 +637,22 @@ private struct BlockTimeBlockViewContent: View {
         let currentBlockIdx = blockManager.blockProgress.currentBlockIndex
         let totalPomoPerBlock = engine.settings.blockPomoCount
 
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             ForEach(0..<engine.settings.blockCount, id: \.self) { blockIndex in
                 HStack(spacing: 8) {
                     // Block index label
                     Text("B\(blockIndex + 1)")
-                        .font(.caption2)
-                        .foregroundColor(blockIndex == currentBlockIdx ? .white : .white.opacity(0.5))
+                        .font(.system(.caption, design: .rounded).weight(.medium))
+                        .foregroundColor(.primary)
+                        .frame(width: 25, alignment: .leading)
 
                     // Show time range if available
                     if blockIndex < engine.settings.blockTimeRanges.count {
                         Text(engine.settings.blockTimeRanges[blockIndex].displayString)
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.4))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
                     }
-
+                    
                     Spacer()
 
                     // Progress circles for this block
@@ -665,10 +666,10 @@ private struct BlockTimeBlockViewContent: View {
                         }
                     }
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 8)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 }
 
