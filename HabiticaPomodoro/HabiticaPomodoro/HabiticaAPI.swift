@@ -37,6 +37,43 @@ struct UserSettings: Codable {
     var blockCount: Int = 8 // 每天分几块（默认 8 块）
     var blockPomoCount: Int = 6 // 每块几个 pomo（默认 6 个）
     var blockGoals: [String] = [] // 每块的目标（可选）
+    var blockTimeRanges: [BlockTimeRange] = [] // 每块的时间范围（如 4:00-7:00）
+
+    init() {
+        // 初始化默认块时间范围（4:00 开始，每块 3 小时）
+        blockTimeRanges = [
+            BlockTimeRange(startHour: 4, startMinute: 0, endHour: 7, endMinute: 0),   // 4:00-7:00
+            BlockTimeRange(startHour: 7, startMinute: 0, endHour: 10, endMinute: 0),  // 7:00-10:00
+            BlockTimeRange(startHour: 10, startMinute: 0, endHour: 13, endMinute: 0),  // 10:00-13:00
+            BlockTimeRange(startHour: 13, startMinute: 0, endHour: 16, endMinute: 0),  // 13:00-16:00
+            BlockTimeRange(startHour: 16, startMinute: 0, endHour: 19, endMinute: 0),  // 16:00-19:00
+            BlockTimeRange(startHour: 19, startMinute: 0, endHour: 22, endMinute: 0),  // 19:00-22:00
+            BlockTimeRange(startHour: 22, startMinute: 0, endHour: 1, endMinute: 0),   // 22:00-01:00
+            BlockTimeRange(startHour: 1, startMinute: 0, endHour: 4, endMinute: 0),    // 01:00-04:00
+        ]
+    }
+}
+
+// MARK: - Block Time Range (块时间范围)
+struct BlockTimeRange: Codable, Equatable {
+    var startHour: Int // 开始小时（0-23）
+    var startMinute: Int // 开始分钟（0-59）
+    var endHour: Int // 结束小时
+    var endMinute: Int // 结束分钟
+
+    var startMinutes: Int { startHour * 60 + startMinute }
+    var endMinutes: Int { endHour * 60 + endMinute }
+
+    // 判断给定时间是否在此块内
+    func contains(hour: Int, minute: Int) -> Bool {
+        let minutes = hour * 60 + minute
+        return minutes >= startMinutes && minutes < endMinutes
+    }
+
+    // 获取时间范围字符串
+    var displayString: String {
+        return String(format: "%02d:%02d-%02d:%02d", startHour, startMinute, endHour, endMinute)
+    }
 }
 
 // MARK: - Block Progress (当前块进度)
@@ -44,6 +81,20 @@ struct BlockProgress: Codable {
     var currentBlockIndex: Int = 0 // 当前块索引 (0-based)
     var blockPomoCounter: Int = 0 // 当前块内完成 pomo 数
     var blockStartTime: Date? = nil // 块开始时间
+
+    // 获取当前时间点对应的块索引
+    static func getCurrentBlockIndex(timeRanges: [BlockTimeRange]) -> Int? {
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: Date())
+        let minute = calendar.component(.minute, from: Date())
+
+        for (index, range) in timeRanges.enumerated() {
+            if range.contains(hour: hour, minute: minute) {
+                return index
+            }
+        }
+        return nil
+    }
 
     func getBlockGoal(goals: [String]) -> String {
         if currentBlockIndex < goals.count && !goals[currentBlockIndex].isEmpty {
@@ -86,7 +137,15 @@ struct BlockHistoryEntry: Codable {
     var completedAt: Date?
 }
 
+// MARK: - Daily Block Progress (每天的块进度)
+struct DailyBlockProgress: Codable {
+    var date: String // yyyy-MM-dd
+    var blockProgress: [Int] // 每个块完成的 pomo 数（索引 0 = block 1）
+    var blockGoals: [String] // 每个块的目标
+}
+
 typealias BlockHistory = [String: [BlockHistoryEntry]] // date -> entries
+typealias DailyBlocksHistory = [String: DailyBlockProgress] // date -> daily progress
 
 // MARK: - Histogram (daily pomodoro counts)
 struct DayHistogram: Codable {

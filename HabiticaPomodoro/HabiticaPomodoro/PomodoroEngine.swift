@@ -98,9 +98,11 @@ class PomodoroEngine: ObservableObject {
 
         // MARK: - Block Mode Logic
         if settings.enableBlockMode {
-            BlockProgressManager.shared.blockProgress.incrementBlockPomo()
+            // 根据当前时间确定属于哪个块
+            BlockProgressManager.shared.recordPomoInCurrentBlock(settings: settings)
+
+            let (completed, total) = BlockProgressManager.shared.getCurrentBlockCompletion(settings: settings)
             let bp = BlockProgressManager.shared.blockProgress
-            let (completed, total) = bp.getBlockProgress(pomoCount: settings.blockPomoCount)
 
             if completed >= total {
                 // Block Complete
@@ -108,8 +110,7 @@ class PomodoroEngine: ObservableObject {
                 let goal = bp.getBlockGoal(goals: settings.blockGoals)
                 msg = "Block \(bp.currentBlockIndex + 1) Complete!\nGoal: \(goal)"
 
-                // Move to next block
-                BlockProgressManager.shared.blockProgress.moveToNextBlock()
+                // 不再自动切换块，让时间决定块索引
                 BlockProgressManager.shared.saveProgress()
             } else {
                 // Still working on current block

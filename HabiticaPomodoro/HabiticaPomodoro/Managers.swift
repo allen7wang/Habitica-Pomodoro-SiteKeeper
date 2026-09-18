@@ -34,9 +34,11 @@ class BlockProgressManager: ObservableObject {
 
     @Published var blockProgress: BlockProgress
     @Published var blockHistory: BlockHistory
+    @Published var dailyBlocksHistory: DailyBlocksHistory
 
     private let progressKey = "habitica_pomodoro_block_progress"
     private let historyKey = "habitica_pomodoro_block_history"
+    private let dailyBlocksKey = "habitica_pomodoro_daily_blocks"
 
     init() {
         if let data = UserDefaults.standard.data(forKey: progressKey),
@@ -53,6 +55,13 @@ class BlockProgressManager: ObservableObject {
             blockHistory = [:]
         }
 
+        if let data = UserDefaults.standard.data(forKey: dailyBlocksKey),
+           let decoded = try? JSONDecoder().decode(DailyBlocksHistory.self, from: data) {
+            dailyBlocksHistory = decoded
+        } else {
+            dailyBlocksHistory = [:]
+        }
+
         // 检查是否需要重置新一天的块
         resetIfNeeded()
     }
@@ -66,6 +75,12 @@ class BlockProgressManager: ObservableObject {
     func saveHistory() {
         if let data = try? JSONEncoder().encode(blockHistory) {
             UserDefaults.standard.set(data, forKey: historyKey)
+        }
+    }
+
+    func saveDailyBlocks() {
+        if let data = try? JSONEncoder().encode(dailyBlocksHistory) {
+            UserDefaults.standard.set(data, forKey: dailyBlocksKey)
         }
     }
 
@@ -97,6 +112,45 @@ class BlockProgressManager: ObservableObject {
         return nil
     }
 
+    // 根据当前时间自动更新块索引
+    func updateBlockIndexFromTime(settings: UserSettings) {
+        if let newIndex = BlockProgress.getCurrentBlockIndex(timeRanges: settings.blockTimeRanges) {
+            if newIndex != blockProgress.currentBlockIndex {
+                blockProgress.currentBlockIndex = newIndex
+                blockProgress.blockPomoCounter = 0 // 切换块时重置 pomo 计数
+                saveProgress()
+            }
+        }
+    }
+
+    // 记录 pomo 完成到当前块
+    func recordPomoInCurrentBlock(settings: UserSettings) {
+        // 先更新当前块索引（基于时间）
+        updateBlockIndexFromTime(settings: settings)
+
+        // 记录到每日进度
+        let today = todayKey()
+        if var daily = dailyBlocksHistory[today] {
+            // 确保数组长度足够
+            while daily.blockProgress.count <= blockProgress.currentBlockIndex {
+                daily.blockProgress.append(0)
+            }
+            daily.blockProgress[blockProgress.currentBlockIndex] = blockProgress.blockPomoCounter + 1
+            dailyBlocksHistory[today] = daily
+        } else {
+            var progress = Array(repeating: 0, count: settings.blockCount)
+            if blockProgress.currentBlockIndex < progress.count {
+                progress[blockProgress.currentBlockIndex] = 1
+            }
+            dailyBlocksHistory[today] = DailyBlockProgress(
+                date: today,
+                blockProgress: progress,
+                blockGoals: settings.blockGoals
+            )
+        }
+        saveDailyBlocks()
+    }
+
     // 记录块完成
     func recordBlockComplete(settings: UserSettings) {
         let entry = BlockHistoryEntry(
@@ -117,10 +171,36 @@ class BlockProgressManager: ObservableObject {
         saveHistory()
     }
 
+    // 获取今天的所有块进度
+    func getTodayBlockProgress(settings: UserSettings) -> [Int] {
+        let today = todayKey()
+        if let daily = dailyBlocksHistory[today] {
+            var progress = daily.blockProgress
+            // 确保长度匹配
+            while progress.count < settings.blockCount {
+                progress.append(0)
+            }
+            return Array(progress.prefix(settings.blockCount))
+        }
+        return Array(repeating: 0, count: settings.blockCount)
+    }
+
+    // 获取当前块完成进度（基于时间）
+    func getCurrentBlockCompletion(settings: UserSettings) -> (completed: Int, total: Int) {
+        updateBlockIndexFromTime(settings: settings)
+        let progress = getTodayBlockProgress(settings: settings)
+        if blockProgress.currentBlockIndex < progress.count {
+            return (progress[blockProgress.currentBlockIndex], settings.blockPomoCount)
+        }
+        return (0, settings.blockPomoCount)
+    }
+
     // 清空历史
     func clearHistory() {
         blockHistory = [:]
+        dailyBlocksHistory = [:]
         saveHistory()
+        saveDailyBlocks()
     }
 
     // 获取今天的块历史
