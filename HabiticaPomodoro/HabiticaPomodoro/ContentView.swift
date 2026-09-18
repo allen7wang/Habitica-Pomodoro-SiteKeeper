@@ -61,6 +61,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Start badge alternating display
         startBadgeAlternating()
 
+        // Start block notification timer
+        BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+
         // Start with timer window visible
         showTimerWindow()
     }
@@ -209,6 +212,12 @@ struct TimerView: View {
             if engine.settings.enableBlockMode {
                 BlockTimeBlockView()
                     .environmentObject(engine)
+                
+                Divider()
+                
+                // 方案B: 可视化时间轴
+                BlockTimelineView()
+                    .frame(height: 200)
             }
 
             // Action buttons row
@@ -279,7 +288,7 @@ struct TimerView: View {
             Spacer()
         }
         .padding(24)
-        .frame(width: 400, height: 520)
+        .frame(width: 450, height: 800)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -304,7 +313,7 @@ struct TimerView: View {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Settings"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 600))
+        window.setContentSize(NSSize(width: 550, height: 650))
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
@@ -336,7 +345,7 @@ struct SettingsView: View {
             habiticaSettingsTab.tabItem { Label("Habitica", systemImage: "link") }
             dataSettingsTab.tabItem { Label("Data", systemImage: "doc") }
         }
-        .frame(width: 480, height: 600)
+        .frame(width: 530, height: 630)
     }
 
     var timerSettingsTab: some View {

@@ -91,21 +91,15 @@ struct BlockCardView: View {
                 Text("B\(blockIndex + 1)")
                     .font(.caption)
                     .fontWeight(.semibold)
-                    .foregroundColor(isCurrent ? .white : .secondary)
+                    .foregroundColor(isCurrent ? .white : .primary)
                 
                 if let range = timeRange {
                     Text(range.displayString)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(isCurrent ? .white.opacity(0.8) : .secondary)
                 }
                 
                 Spacer()
-                
-                if isCurrent {
-                    Circle()
-                        .fill(Color.orange)
-                        .frame(width: 6, height: 6)
-                }
             }
             
             // Progress bar
@@ -117,24 +111,25 @@ struct BlockCardView: View {
                 if !goal.isEmpty {
                     Text(goal)
                         .font(.caption)
-                        .foregroundColor(.primary)
+                        .foregroundColor(isCurrent ? .white : .primary)
                         .lineLimit(2)
                 }
                 
                 if !tasks.isEmpty {
                     Text("\(tasks.filter { $0.isCompleted }.count)/\(tasks.count) tasks")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(isCurrent ? .white.opacity(0.8) : .secondary)
                 }
             }
             .frame(maxWidth: 120)
         }
         .padding(12)
         .frame(width: 140, height: 160)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(isCurrent ? Color.orange : Color(NSColor.controlBackgroundColor))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(isDragging ? 0.2 : 0.05), radius: isDragging ? 8 : 4)
         .scaleEffect(isDragging ? 1.05 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isCurrent)
         .animation(.easeInOut(duration: 0.2), value: isDragging)
         .onTapGesture(perform: onTap)
         .onDrag {
@@ -191,37 +186,39 @@ struct BlockTaskEditorView: View {
                 Divider()
                 
                 // Tasks list
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(tasks) { task in
-                        HStack(spacing: 8) {
-                            Button(action: {
-                                toggleTask(task: task)
-                            }) {
-                                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
-                                    .foregroundColor(task.isCompleted ? .green : .secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(tasks) { task in
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    toggleTask(task: task)
+                                }) {
+                                    Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(task.isCompleted ? .green : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                                
+                                Text(task.title)
+                                    .font(.body)
+                                    .strikethrough(task.isCompleted)
+                                    .foregroundColor(task.isCompleted ? .secondary : .primary)
+                                
+                                Spacer()
+                                
+                                Text("\(task.estimatedPomo)p")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Button(action: {
+                                    deleteTask(task: task)
+                                }) {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
-                            
-                            Text(task.title)
-                                .font(.body)
-                                .strikethrough(task.isCompleted)
-                                .foregroundColor(task.isCompleted ? .secondary : .primary)
-                            
-                            Spacer()
-                            
-                            Text("\(task.estimatedPomo)p")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Button(action: {
-                                deleteTask(task: task)
-                            }) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                            .buttonStyle(.plain)
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
                 
@@ -240,11 +237,10 @@ struct BlockTaskEditorView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                
-                Spacer()
             }
             .padding()
             .navigationTitle("Block Tasks")
+            .frame(minWidth: 500, minHeight: 600)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
