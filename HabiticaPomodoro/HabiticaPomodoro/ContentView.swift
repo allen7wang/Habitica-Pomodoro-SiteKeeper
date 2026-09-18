@@ -84,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             timerWindow?.title = "Habitica Pomodoro"
             timerWindow?.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
             timerWindow?.setFrameAutosaveName("TimerWindow")
-            timerWindow?.setContentSize(NSSize(width: 360, height: 420))
+            timerWindow?.setContentSize(NSSize(width: 400, height: 520))
         }
         timerWindow?.center()
         timerWindow?.makeKeyAndOrderFront(nil)
@@ -294,7 +294,18 @@ struct TimerView: View {
     }
 
     func showSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        if let settingsWindow = NSApp.windows.first(where: { $0.title == "Settings" }) {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        
+        let hostingController = NSHostingController(rootView: SettingsView())
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Settings"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 480, height: 600))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 
     func showHistoryWindow() {
