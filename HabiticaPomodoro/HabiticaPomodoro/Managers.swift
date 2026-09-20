@@ -2,7 +2,47 @@ import Foundation
 import AVFoundation
 import Combine
 
-// MARK: - Settings Manager (persisted via UserDefaults + JSON)
+// MARK: - Data Directory (配置文件统一存放在 Documents 下的隐藏文件夹)
+// ~/Documents 由 iCloud Drive（桌面与文稿同步）自动同步，
+// 因此 .habitica-pomodoro 文件夹及其中的 JSON 文件会随 iCloud 同步到其他设备。
+enum PomodoroDataDir {
+    static let folderName = ".habitica-pomodoro"
+
+    static var url: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent(folderName)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    static func fileURL(_ fileName: String) -> URL {
+        url.appendingPathComponent(fileName)
+    }
+
+    // 一次性迁移：把旧的散落在 Documents 根目录的文件移入隐藏文件夹
+    static func migrateOldFiles() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let oldNames = [
+            "habitica_pomodoro_settings.json",
+            "habitica_pomodoro_block_progress.json",
+            "habitica_pomodoro_block_history.json",
+            "habitica_pomodoro_daily_blocks.json",
+            "habitica_pomodoro_top_three.json",
+        ]
+        for name in oldNames {
+            let oldURL = docs.appendingPathComponent(name)
+            let newURL = fileURL(name)
+            if FileManager.default.fileExists(atPath: oldURL.path),
+               !FileManager.default.fileExists(atPath: newURL.path) {
+                try? FileManager.default.moveItem(at: oldURL, to: newURL)
+            }
+        }
+    }
+}
+
+// MARK: - Settings Manager (persisted via iCloud)
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
 
@@ -10,20 +50,66 @@ class SettingsManager: ObservableObject {
         didSet { save() }
     }
 
-    private let key = "habitica_pomodoro_settings"
+    private let fileName = "habitica_pomodoro_settings.json"
+    private var fileURL: URL {
+        PomodoroDataDir.fileURL(fileName)
+    }
+    
+    private let localBackupKey = "habitica_pomodoro_settings_backup"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let decoded = try? JSONDecoder().decode(UserSettings.self, from: data) {
-            settings = decoded
-        } else {
-            settings = UserSettings()
+        // 迁移旧文件到隐藏文件夹
+        PomodoroDataDir.migrateOldFiles()
+
+        // Initialize settings first
+        self.settings = UserSettings()
+        
+        // Load from iCloud or local fallback
+        if let loadedSettings = Self.loadFile(UserSettings.self, from: fileURL) {
+            self.settings = loadedSettings
+        } else if let data = UserDefaults.standard.data(forKey: localBackupKey),
+                  let decoded = try? JSONDecoder().decode(UserSettings.self, from: data) {
+            self.settings = decoded
+        }
+    }
+    
+    private static func getDocumentsDirectory() -> URL {
+        PomodoroDataDir.url
+    }
+    
+    private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
+        do {
+            let jsonData = try Data(contentsOf: url)
+            return try JSONDecoder().decode(type, from: jsonData)
+        } catch {
+            return nil
+        }
+    }
+    
+    private static func saveFile(_ data: Data, to url: URL) -> Bool {
+        do {
+            let directory = url.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            try data.write(to: url)
+            print("Saved to: \(url.path)")
+            return true
+        } catch {
+            print("Error saving to \(url.path): \(error)")
+            return false
         }
     }
 
     func save() {
         if let data = try? JSONEncoder().encode(settings) {
-            UserDefaults.standard.set(data, forKey: key)
+            // Save to file
+            if Self.saveFile(data, to: fileURL) {
+                print("Settings saved to: \(fileURL.path)")
+            }
+            
+            // Also save to UserDefaults as backup
+            UserDefaults.standard.set(data, forKey: localBackupKey)
         }
     }
 }
@@ -36,27 +122,50 @@ class BlockProgressManager: ObservableObject {
     @Published var blockHistory: BlockHistory
     @Published var dailyBlocksHistory: DailyBlocksHistory
 
-    private let progressKey = "habitica_pomodoro_block_progress"
-    private let historyKey = "habitica_pomodoro_block_history"
-    private let dailyBlocksKey = "habitica_pomodoro_daily_blocks"
+    private let progressFileName = "habitica_pomodoro_block_progress.json"
+    private let historyFileName = "habitica_pomodoro_block_history.json"
+    private let dailyBlocksFileName = "habitica_pomodoro_daily_blocks.json"
+    
+    private static func getDocumentsDirectory() -> URL {
+        PomodoroDataDir.url
+    }
+
+    private var progressFileURL: URL { Self.getDocumentsDirectory().appendingPathComponent(progressFileName) }
+    private var historyFileURL: URL { Self.getDocumentsDirectory().appendingPathComponent(historyFileName) }
+    private var dailyBlocksFileURL: URL { Self.getDocumentsDirectory().appendingPathComponent(dailyBlocksFileName) }
+    
+    private let localBackupProgressKey = "habitica_pomodoro_block_progress_backup"
+    private let localBackupHistoryKey = "habitica_pomodoro_block_history_backup"
+    private let localBackupDailyBlocksKey = "habitica_pomodoro_daily_blocks_backup"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: progressKey),
-           let decoded = try? JSONDecoder().decode(BlockProgress.self, from: data) {
+        let docsDir = Self.getDocumentsDirectory()
+        
+        // Load block progress
+        if let loadedProgress = Self.loadFile(BlockProgress.self, from: docsDir.appendingPathComponent(progressFileName)) {
+            blockProgress = loadedProgress
+        } else if let data = UserDefaults.standard.data(forKey: localBackupProgressKey),
+                  let decoded = try? JSONDecoder().decode(BlockProgress.self, from: data) {
             blockProgress = decoded
         } else {
             blockProgress = BlockProgress()
         }
 
-        if let data = UserDefaults.standard.data(forKey: historyKey),
-           let decoded = try? JSONDecoder().decode(BlockHistory.self, from: data) {
+        // Load block history
+        if let loadedHistory = Self.loadFile([String: [BlockHistoryEntry]].self, from: docsDir.appendingPathComponent(historyFileName)) {
+            blockHistory = loadedHistory
+        } else if let data = UserDefaults.standard.data(forKey: localBackupHistoryKey),
+                  let decoded = try? JSONDecoder().decode([String: [BlockHistoryEntry]].self, from: data) {
             blockHistory = decoded
         } else {
             blockHistory = [:]
         }
 
-        if let data = UserDefaults.standard.data(forKey: dailyBlocksKey),
-           let decoded = try? JSONDecoder().decode(DailyBlocksHistory.self, from: data) {
+        // Load daily blocks history
+        if let loadedDaily = Self.loadFile(DailyBlocksHistory.self, from: docsDir.appendingPathComponent(dailyBlocksFileName)) {
+            dailyBlocksHistory = loadedDaily
+        } else if let data = UserDefaults.standard.data(forKey: localBackupDailyBlocksKey),
+                  let decoded = try? JSONDecoder().decode(DailyBlocksHistory.self, from: data) {
             dailyBlocksHistory = decoded
         } else {
             dailyBlocksHistory = [:]
@@ -65,22 +174,58 @@ class BlockProgressManager: ObservableObject {
         // 检查是否需要重置新一天的块
         resetIfNeeded()
     }
+    
+    private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
+        do {
+            let jsonData = try Data(contentsOf: url)
+            return try JSONDecoder().decode(type, from: jsonData)
+        } catch {
+            return nil
+        }
+    }
+    
+    private static func saveFile<T: Codable>(_ data: T, to url: URL) -> Bool {
+        do {
+            let directory = url.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            let jsonData: Data
+            if let dataAsData = data as? Data {
+                jsonData = dataAsData
+            } else {
+                jsonData = try JSONEncoder().encode(data)
+            }
+            try jsonData.write(to: url)
+            print("Saved to: \(url.path)")
+            return true
+        } catch {
+            print("Error saving to \(url.path): \(error)")
+            return false
+        }
+    }
 
     func saveProgress() {
+        Self.saveFile(blockProgress, to: progressFileURL)
+        
         if let data = try? JSONEncoder().encode(blockProgress) {
-            UserDefaults.standard.set(data, forKey: progressKey)
+            UserDefaults.standard.set(data, forKey: localBackupProgressKey)
         }
     }
 
     func saveHistory() {
+        Self.saveFile(blockHistory, to: historyFileURL)
+        
         if let data = try? JSONEncoder().encode(blockHistory) {
-            UserDefaults.standard.set(data, forKey: historyKey)
+            UserDefaults.standard.set(data, forKey: localBackupHistoryKey)
         }
     }
 
     func saveDailyBlocks() {
+        Self.saveFile(dailyBlocksHistory, to: dailyBlocksFileURL)
+        
         if let data = try? JSONEncoder().encode(dailyBlocksHistory) {
-            UserDefaults.standard.set(data, forKey: dailyBlocksKey)
+            UserDefaults.standard.set(data, forKey: localBackupDailyBlocksKey)
         }
     }
 
@@ -128,6 +273,9 @@ class BlockProgressManager: ObservableObject {
         // 先更新当前块索引（基于时间）
         updateBlockIndexFromTime(settings: settings)
 
+        // 增加当前块的 pomo 计数
+        blockProgress.incrementBlockPomo()
+
         // 记录到每日进度
         let today = todayKey()
         if var daily = dailyBlocksHistory[today] {
@@ -135,7 +283,7 @@ class BlockProgressManager: ObservableObject {
             while daily.blockProgress.count <= blockProgress.currentBlockIndex {
                 daily.blockProgress.append(0)
             }
-            daily.blockProgress[blockProgress.currentBlockIndex] = blockProgress.blockPomoCounter + 1
+            daily.blockProgress[blockProgress.currentBlockIndex] = blockProgress.blockPomoCounter
             dailyBlocksHistory[today] = daily
         } else {
             var progress = Array(repeating: 0, count: settings.blockCount)
@@ -206,6 +354,158 @@ class BlockProgressManager: ObservableObject {
     // 获取今天的块历史
     func getTodayBlocks() -> [BlockHistoryEntry] {
         return blockHistory[todayKey()] ?? []
+    }
+}
+
+// MARK: - Top Three Manager (当天最重要的三件事，Work / MyOwn 两类)
+class TopThreeManager: ObservableObject {
+    static let shared = TopThreeManager()
+
+    @Published var store: TopThreeStore
+
+    private let fileName = "habitica_pomodoro_top_three.json"
+    private var fileURL: URL { PomodoroDataDir.fileURL(fileName) }
+    private let localBackupKey = "habitica_pomodoro_top_three_backup"
+
+    init() {
+        if let loaded = Self.loadFile(TopThreeStore.self, from: PomodoroDataDir.fileURL(fileName)) {
+            store = loaded
+        } else if let data = UserDefaults.standard.data(forKey: "habitica_pomodoro_top_three_backup"),
+                  let decoded = try? JSONDecoder().decode(TopThreeStore.self, from: data) {
+            store = decoded
+        } else {
+            store = TopThreeStore()
+        }
+    }
+
+    private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
+        do {
+            let jsonData = try Data(contentsOf: url)
+            return try JSONDecoder().decode(type, from: jsonData)
+        } catch {
+            return nil
+        }
+    }
+
+    func save() {
+        do {
+            let url = fileURL
+            let directory = url.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            let jsonData = try JSONEncoder().encode(store)
+            try jsonData.write(to: url)
+            UserDefaults.standard.set(jsonData, forKey: localBackupKey)
+            print("TopThree saved to: \(url.path)")
+        } catch {
+            print("Error saving TopThree: \(error)")
+        }
+    }
+
+    // MARK: 逻辑日：一天的开始 = 第一个 time block 的启动时间
+    func logicalDateKey(settings: UserSettings, date: Date = Date()) -> String {
+        // 第一个块的开始时间（分钟）
+        let boundaryMinutes = settings.blockTimeRanges.first?.startMinutes ?? 0
+
+        let cal = Calendar.current
+        let minuteOfDay = cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
+
+        // 如果当前时间在第一个块开始时间之前，逻辑上还是"昨天"
+        var logical = date
+        if minuteOfDay < boundaryMinutes {
+            logical = cal.date(byAdding: .day, value: -1, to: date) ?? date
+        }
+
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: logical)
+    }
+
+    func todayKey(settings: UserSettings) -> String {
+        return logicalDateKey(settings: settings)
+    }
+
+    func yesterdayKey(settings: UserSettings) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        let today = todayKey(settings: settings)
+        if let d = f.date(from: today),
+           let prev = Calendar.current.date(byAdding: .day, value: -1, to: d) {
+            return f.string(from: prev)
+        }
+        return today
+    }
+
+    // 只有"今天"（逻辑日）的任务可以修改
+    func isEditable(key: String, settings: UserSettings) -> Bool {
+        return key == todayKey(settings: settings)
+    }
+
+    // MARK: 分类名（可自定义）
+    var categoryCount: Int { store.categoryNames.count }
+
+    func categoryName(index: Int) -> String {
+        guard index < store.categoryNames.count else { return "Category \(index + 1)" }
+        return store.categoryNames[index]
+    }
+
+    func setCategoryName(index: Int, name: String) {
+        guard index < store.categoryNames.count else { return }
+        store.categoryNames[index] = name
+        save()
+    }
+
+    // MARK: 任务读写（按分类）
+    private func ensureDay(key: String) {
+        if store.history[key] == nil {
+            store.history[key] = TopThreeDay(date: key)
+        }
+        var day = store.history[key]!
+        while day.taskGroups.count < categoryCount {
+            day.taskGroups.append([])
+        }
+        // 每组补齐 3 个槽位
+        for i in 0..<day.taskGroups.count {
+            while day.taskGroups[i].count < 3 {
+                day.taskGroups[i].append(TopThreeTask(title: ""))
+            }
+        }
+        store.history[key] = day
+    }
+
+    func setTaskTitle(key: String, category: Int, index: Int, title: String, settings: UserSettings) {
+        guard isEditable(key: key, settings: settings) else { return }
+        ensureDay(key: key)
+        guard var day = store.history[key],
+              category < day.taskGroups.count,
+              index < day.taskGroups[category].count else { return }
+        day.taskGroups[category][index].title = title
+        store.history[key] = day
+        save()
+    }
+
+    func toggleTask(key: String, category: Int, index: Int, settings: UserSettings) {
+        guard isEditable(key: key, settings: settings) else { return }
+        ensureDay(key: key)
+        guard var day = store.history[key],
+              category < day.taskGroups.count,
+              index < day.taskGroups[category].count else { return }
+        day.taskGroups[category][index].isCompleted.toggle()
+        store.history[key] = day
+        save()
+    }
+
+    func getTasks(key: String, category: Int) -> [TopThreeTask] {
+        if let day = store.history[key],
+           category < day.taskGroups.count {
+            var tasks = day.taskGroups[category]
+            while tasks.count < 3 {
+                tasks.append(TopThreeTask(title: ""))
+            }
+            return tasks
+        }
+        return Array(repeating: TopThreeTask(title: ""), count: 3)
     }
 }
 

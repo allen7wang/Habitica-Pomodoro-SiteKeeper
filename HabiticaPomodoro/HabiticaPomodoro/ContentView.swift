@@ -37,7 +37,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Setup status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = nil // Hide icon, show text only
+            // Start with icon
+            if let icon = NSImage(systemSymbolName: "clock.fill", accessibilityDescription: "Pomodoro") {
+                icon.isTemplate = true
+                button.image = icon
+            } else {
+                button.title = "🍅"
+            }
             button.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
             button.action = #selector(toggleTimerWindow)
             button.target = self
@@ -86,9 +92,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             let hostingController = NSHostingController(rootView: contentView)
             timerWindow = NSWindow(contentViewController: hostingController)
             timerWindow?.title = "Habitica Pomodoro"
-            timerWindow?.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
-            timerWindow?.setFrameAutosaveName("TimerWindow")
-            timerWindow?.setContentSize(NSSize(width: 400, height: 520))
+            timerWindow?.styleMask = [.titled, .closable, .miniaturizable]
+            timerWindow?.setFrameAutosaveName("TimerWindowV7")
+            timerWindow?.setContentSize(NSSize(width: 470, height: 820))
         }
         timerWindow?.center()
         timerWindow?.makeKeyAndOrderFront(nil)
@@ -111,9 +117,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let engine = PomodoroEngine.shared
 
         if !engine.isRunning {
-            button.title = ""
+            // Show icon when not running
+            if let icon = NSImage(systemSymbolName: "clock.fill", accessibilityDescription: "Pomodoro") {
+                icon.isTemplate = true
+                button.image = icon
+            } else {
+                // Fallback: use text
+                button.title = "🍅"
+                button.image = nil
+            }
             return
         }
+
+        // Clear icon when running, show text
+        button.image = nil
 
         let settings = SettingsManager.shared.settings
 
@@ -127,7 +144,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 BlockProgressManager.shared.updateBlockIndexFromTime(settings: settings)
                 let (completed, total) = BlockProgressManager.shared.getCurrentBlockCompletion(settings: settings)
                 let bp = BlockProgressManager.shared.blockProgress
-                button.title = "B\(bp.currentBlockIndex + 1):\(completed)/\(total)"
+                // 番茄进行中时，展示"正在进行的第几个"（completed + 1）
+                let inProgress = engine.isRunning && engine.phase == .pomodoro
+                let display = min(inProgress ? completed + 1 : completed, total)
+                button.title = "B\(bp.currentBlockIndex + 1):\(display)/\(total)"
             } else {
                 // Regular mode: show pomo set progress
                 button.title = "\(engine.pomoSetCounter)/\(engine.settings.pomoSetNum)"
@@ -171,14 +191,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
+    @State private var selectedTab = 0 // 0 = Pomo, 1 = Task
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
+            // Tab 切换: Pomo / Task
+            Picker("", selection: $selectedTab) {
+                Text("Pomo").tag(0)
+                Text("Task").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+
+            if selectedTab == 0 {
+                pomoTab
+            } else {
+                taskTab
+            }
+        }
+        .frame(width: 470, height: 820)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    // MARK: - Pomo Tab（番茄钟相关）
+    var pomoTab: some View {
+        VStack(spacing: 12) {
             // Tomato / status circle
             ZStack {
                 Circle()
                     .fill(tomatoColor)
-                    .frame(width: 120, height: 120)
+                    .frame(width: 110, height: 110)
                     .shadow(radius: 4)
 
                 VStack {
@@ -199,6 +243,7 @@ struct TimerView: View {
                 }
             }
             .onTapGesture { engine.activate() }
+            .padding(.top, 12)
 
             // Today count
             HStack(spacing: 4) {
@@ -217,7 +262,7 @@ struct TimerView: View {
                 
                 // 方案B: 可视化时间轴
                 BlockTimelineView()
-                    .frame(height: 200)
+                    .frame(height: 216)
             }
 
             // Action buttons row
@@ -251,7 +296,7 @@ struct TimerView: View {
                     .help("End session")
                 }
             }
-            .frame(height: 28)
+            .frame(height: 24)
 
             // Habitica stats
             if engine.settings.connectHabitica {
@@ -288,8 +333,13 @@ struct TimerView: View {
             Spacer()
         }
         .padding(24)
-        .frame(width: 450, height: 800)
-        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    // MARK: - Task Tab（最重要的三件事）
+    var taskTab: some View {
+        TopThreeView()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
     }
 
     var tomatoColor: Color {
@@ -559,17 +609,33 @@ struct SettingsView: View {
     var dataSettingsTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Export/Import Data").font(.headline)
+                Text("Data Storage").font(.headline)
                 
-                Button("Export Block History") {
-                    exportBlockHistory()
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill")
+                        .foregroundColor(.blue)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Saved to Documents/.habitica-pomodoro")
+                            .font(.body)
+                        Text(PomodoroDataDir.url.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    
+                    Spacer()
+                    
+                    Button("Save Now") {
+                        syncAllData()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.borderedProminent)
                 
-                Button("Import Block History") {
-                    importBlockHistory()
-                }
-                .buttonStyle(.bordered)
+                Text("隐藏文件夹，随 Documents 由 iCloud Drive 自动同步")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 
                 Divider()
                 
@@ -600,45 +666,21 @@ struct SettingsView: View {
         }
     }
     
-    private func exportBlockHistory() {
-        let manager = BlockProgressManager.shared
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .prettyPrinted
+    private func syncAllData() {
+        SettingsManager.shared.save()
+        BlockProgressManager.shared.saveProgress()
+        BlockProgressManager.shared.saveHistory()
+        BlockProgressManager.shared.saveDailyBlocks()
+        TopThreeManager.shared.save()
         
-        do {
-            let data = try encoder.encode(manager.blockHistory)
-            let savePanel = NSSavePanel()
-            savePanel.allowedContentTypes = [.json]
-            savePanel.nameFieldStringValue = "block_history_\(Date().ISO8601Format()).json"
-            savePanel.begin { result in
-                if result == .OK, let url = savePanel.url {
-                    try? data.write(to: url)
-                }
-            }
-        } catch {
-            print("Export failed: \(error)")
-        }
+        let alert = NSAlert()
+        alert.messageText = "Saved"
+        alert.informativeText = "All data saved to Documents/.habitica-pomodoro"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
     
-    private func importBlockHistory() {
-        let openPanel = NSOpenPanel()
-        openPanel.allowedContentTypes = [.json]
-        openPanel.begin { result in
-            if result == .OK, let url = openPanel.url {
-                do {
-                    let data = try Data(contentsOf: url)
-                    let decoder = JSONDecoder()
-                    let history = try decoder.decode([String: [BlockHistoryEntry]].self, from: data)
-                    BlockProgressManager.shared.blockHistory = history
-                    BlockProgressManager.shared.saveDailyBlocks()
-                    print("Imported \(history.count) days of data")
-                } catch {
-                    print("Import failed: \(error)")
-                }
-            }
-        }
-    }
-
     func stepperRow(_ label: String, value: Binding<Int>, range: ClosedRange<Int>, suffix: String) -> some View {
         HStack {
             Text(label)
@@ -704,10 +746,6 @@ private struct CurrentBlockProgressViewContent: View {
             Text("B\(bp.currentBlockIndex + 1): \(completed)/\(total)")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
-            Text(bp.getBlockGoal(goals: engine.settings.blockGoals))
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.6))
-                .lineLimit(1)
         }
     }
 }
@@ -745,6 +783,18 @@ private struct BlockTimeBlockViewContent: View {
                         Text(engine.settings.blockTimeRanges[blockIndex].displayString)
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
+                    }
+                    
+                    // Show block goal if available
+                    if blockIndex < engine.settings.blockGoals.count {
+                        let goal = engine.settings.blockGoals[blockIndex]
+                        if !goal.isEmpty {
+                            Text(goal)
+                                .font(.system(.caption, design: .default))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                     
                     Spacer()

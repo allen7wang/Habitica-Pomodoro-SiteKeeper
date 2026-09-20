@@ -169,6 +169,26 @@ struct DailyBlockProgress: Codable {
 typealias BlockHistory = [String: [BlockHistoryEntry]] // date -> entries
 typealias DailyBlocksHistory = [String: DailyBlockProgress] // date -> daily progress
 
+// MARK: - Top Three (当天最重要的三件事，按分类 Work / MyOwn)
+struct TopThreeTask: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var title: String
+    var isCompleted: Bool = false
+}
+
+struct TopThreeDay: Codable {
+    var date: String // yyyy-MM-dd（逻辑日，以第一个 time block 启动时间为界）
+    var taskGroups: [[TopThreeTask]] = [] // 每个分类一组，每组 3 个任务
+}
+
+// 持久化单元：分类名可自定义 + 历史记录
+struct TopThreeStore: Codable {
+    var categoryNames: [String] = ["Work", "MyOwn"]
+    var history: [String: TopThreeDay] = [:] // logical date -> day record
+}
+
+typealias TopThreeHistory = [String: TopThreeDay] // logical date -> day record
+
 // MARK: - Histogram (daily pomodoro counts)
 struct DayHistogram: Codable {
     var pomodoros: Int
