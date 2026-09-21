@@ -191,24 +191,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
-    @State private var selectedTab = 0 // 0 = Pomo, 1 = Task
+    @State private var selectedTab = 0 // 0 = Pomo, 1 = Task, 2 = Habits, 3 = Dailies, 4 = Profile
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab 切换: Pomo / Task
+            // Tab 切换: Pomo / Task / Habits / Dailies / Profile
             Picker("", selection: $selectedTab) {
                 Text("Pomo").tag(0)
                 Text("Task").tag(1)
+                Text("Habits").tag(2)
+                Text("Dailies").tag(3)
+                Text("Role").tag(4)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
             .padding(.top, 12)
 
-            if selectedTab == 0 {
-                pomoTab
-            } else {
-                taskTab
+            switch selectedTab {
+            case 0: pomoTab
+            case 1: taskTab
+            case 2: HabiticaHabitsView()
+            case 3: HabiticaDailiesView()
+            default: HabiticaProfileView()
             }
         }
         .frame(width: 470, height: 820)

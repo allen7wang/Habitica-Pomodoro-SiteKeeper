@@ -256,6 +256,18 @@ struct HabiticaConsts {
     static let pathReward = "tasks/sitepass"
 }
 
+// MARK: - Habitica Task Item (habits / dailies 列表项)
+struct HabiticaTaskItem: Identifiable, Equatable {
+    let id: String
+    let text: String
+    let notes: String
+    let value: Double
+    let completed: Bool
+    let canUp: Bool
+    let canDown: Bool
+    let isDue: Bool // dailies: 今天是否到期
+}
+
 // MARK: - Habitica API Client
 class HabiticaAPI: ObservableObject {
     static let shared = HabiticaAPI()
@@ -574,4 +586,139 @@ class HabiticaAPI: ObservableObject {
             return http.statusCode == 200
         } catch { return false }
     }
+
+    // MARK: - Task Lists (habits / dailies)
+
+    // 获取指定类型的任务列表
+    func fetchTasks(type: String, settings: UserSettings) async -> [HabiticaTaskItem] {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return [] }
+        guard let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tasks/user?type=\(type)") else { return [] }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = json["data"] as? [[String: Any]] else { return [] }
+            return arr.compactMap { t in
+                guard let id = t["id"] as? String,
+                      let text = t["text"] as? String else { return nil }
+                let notes = t["notes"] as? String ?? ""
+                let value = t["value"] as? Double ?? 0
+                var completed = false
+                var isDue = true
+                if type == "dailys" {
+                    completed = t["completed"] as? Bool ?? false
+                    isDue = t["isDue"] as? Bool ?? true
+                }
+                var canUp = true, canDown = true
+                if let up = t["up"] as? Bool { canUp = up }
+                if let down = t["down"] as? Bool { canDown = down }
+                return HabiticaTaskItem(id: id, text: text, notes: notes, value: value,
+                                        completed: completed, canUp: canUp, canDown: canDown, isDue: isDue)
+            }
+        } catch { return [] }
+    }
+
+    // 打分（up/down），返回最新 stats
+    func scoreTask(taskId: String, direction: String, settings: UserSettings) async -> [String: Double]? {
+        return await scoreHabit(taskId: taskId, direction: direction, settings: settings)
+    }
+
+    // MARK: - User Profile (账号信息)
+
+    // 获取完整账号信息
+    func fetchProfile(settings: UserSettings) async -> HabiticaProfile? {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        let urlStr = configure(serverUrlOverride: settings.developerServerUrl) + HabiticaConsts.pathUser + "?userFields=auth,stats,achievements"
+        guard let url = URL(string: urlStr) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let d = json["data"] as? [String: Any] else { return nil }
+            return parseProfile(d)
+        } catch { return nil }
+    }
+
+    private func parseProfile(_ d: [String: Any]) -> HabiticaProfile {
+        var p = HabiticaProfile()
+        if let auth = d["auth"] as? [String: Any] {
+            if let local = auth["local"] as? [String: Any] {
+                p.username = (local["username"] as? String) ?? ""
+            }
+            // timestamps 在 auth 层级，ISO8601 字符串格式
+            if let timestamps = auth["timestamps"] as? [String: Any] {
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let f2 = ISO8601DateFormatter()
+                if let created = timestamps["created"] as? String {
+                    p.joinedAt = f.date(from: created) ?? f2.date(from: created)
+                }
+                if let login = timestamps["loggedin"] as? String {
+                    p.lastLoginAt = f.date(from: login) ?? f2.date(from: login)
+                }
+            }
+        }
+        if let stats = d["stats"] as? [String: Any] {
+            p.className = (stats["class"] as? String) ?? ""
+            p.level = Int(stats["lvl"] as? Double ?? 0)
+            p.exp = stats["exp"] as? Double ?? 0
+            p.hp = stats["hp"] as? Double ?? 0
+            p.mp = stats["mp"] as? Double ?? 0
+            p.gp = stats["gp"] as? Double ?? 0
+            p.str = Int(stats["str"] as? Double ?? 0)
+            p.con = Int(stats["con"] as? Double ?? 0)
+            p.int = Int(stats["int"] as? Double ?? 0)
+            p.per = Int(stats["per"] as? Double ?? 0)
+            p.toNextLevel = stats["toNextLevel"] as? Double ?? 0
+            p.maxHealth = 50 // Habitica HP 上限固定 50
+            // MP 上限公式: 30 + 3*(lvl-1) + int/2
+            let lvl = Double(p.level)
+            p.maxMP = 30 + 3 * max(0, lvl - 1) + Double(p.int) / 2
+        }
+        if let achievements = d["achievements"] as? [String: Any] {
+            p.streak = Int(achievements["streak"] as? Double ?? 0)
+            p.perfectDays = Int(achievements["perfectCount"] as? Double ?? 0)
+            p.questsTotal = 0
+            if let quests = achievements["quests"] as? [String: Any] {
+                p.questsTotal = quests.values.reduce(0) { $0 + Int($1 as? Double ?? 0) }
+            }
+        }
+        return p
+    }
+}
+
+// MARK: - Habitica Profile (账号信息)
+struct HabiticaProfile {
+    var username: String = ""
+    var authId: String = ""
+    var className: String = ""
+    var level: Int = 0
+    var exp: Double = 0
+    var toNextLevel: Double = 0
+    var hp: Double = 0
+    var maxHealth: Double = 50
+    var mp: Double = 0
+    var maxMP: Double = 0
+    var gp: Double = 0
+    var str: Int = 0
+    var con: Int = 0
+    var int: Int = 0
+    var per: Int = 0
+    var streak: Int = 0
+    var perfectDays: Int = 0
+    var questsTotal: Int = 0
+    var joinedAt: Date? = nil
+    var lastLoginAt: Date? = nil
 }
