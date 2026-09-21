@@ -169,22 +169,68 @@ struct DailyBlockProgress: Codable {
 typealias BlockHistory = [String: [BlockHistoryEntry]] // date -> entries
 typealias DailyBlocksHistory = [String: DailyBlockProgress] // date -> daily progress
 
-// MARK: - Top Three (当天最重要的三件事，按分类 Work / MyOwn)
+// MARK: - Top Three (当天最重要的三件事，按分类 Work / MyOwn / 琐事)
 struct TopThreeTask: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var title: String
     var isCompleted: Bool = false
+    var habiticaTaskId: String? = nil // 对应的 Habitica todo id
+    var movedToToday: Bool = false    // 昨天任务已移动到今日
+
+    enum CodingKeys: String, CodingKey { case id, title, isCompleted, habiticaTaskId, movedToToday }
+
+    init(id: UUID = UUID(), title: String, isCompleted: Bool = false, habiticaTaskId: String? = nil, movedToToday: Bool = false) {
+        self.id = id
+        self.title = title
+        self.isCompleted = isCompleted
+        self.habiticaTaskId = habiticaTaskId
+        self.movedToToday = movedToToday
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        isCompleted = try c.decodeIfPresent(Bool.self, forKey: .isCompleted) ?? false
+        habiticaTaskId = try c.decodeIfPresent(String.self, forKey: .habiticaTaskId)
+        movedToToday = try c.decodeIfPresent(Bool.self, forKey: .movedToToday) ?? false
+    }
 }
 
 struct TopThreeDay: Codable {
     var date: String // yyyy-MM-dd（逻辑日，以第一个 time block 启动时间为界）
-    var taskGroups: [[TopThreeTask]] = [] // 每个分类一组，每组 3 个任务
+    var taskGroups: [[TopThreeTask]] = [] // 每个分类一组；Work/MyOwn 固定 3 槽位，琐事为自由列表
+
+    enum CodingKeys: String, CodingKey { case date, taskGroups }
+
+    init(date: String, taskGroups: [[TopThreeTask]] = []) {
+        self.date = date
+        self.taskGroups = taskGroups
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try c.decode(String.self, forKey: .date)
+        taskGroups = try c.decodeIfPresent([[TopThreeTask]].self, forKey: .taskGroups) ?? []
+    }
 }
 
-// 持久化单元：分类名可自定义 + 历史记录
+// 持久化单元：分类名可自定义 + Habitica tag 映射 + 历史记录
 struct TopThreeStore: Codable {
-    var categoryNames: [String] = ["Work", "MyOwn"]
+    var categoryNames: [String] = ["Work", "MyOwn", "Chores"]
+    var categoryTagIds: [String: String] = [:] // 分类名 -> Habitica tag id
     var history: [String: TopThreeDay] = [:] // logical date -> day record
+
+    enum CodingKeys: String, CodingKey { case categoryNames, categoryTagIds, history }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        categoryNames = try c.decodeIfPresent([String].self, forKey: .categoryNames) ?? ["Work", "MyOwn", "Chores"]
+        categoryTagIds = try c.decodeIfPresent([String: String].self, forKey: .categoryTagIds) ?? [:]
+        history = try c.decodeIfPresent([String: TopThreeDay].self, forKey: .history) ?? [:]
+    }
 }
 
 typealias TopThreeHistory = [String: TopThreeDay] // logical date -> day record
@@ -372,5 +418,160 @@ class HabiticaAPI: ObservableObject {
         let body: [String: Any] = ["message": message, "toUserId": settings.uid]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         _ = try? await URLSession.shared.data(for: req)
+    }
+
+    // MARK: - Tags (用于任务分类 Work/MyOwn/Chores)
+
+    // 获取所有 tag: [tagId: tagName]
+    func fetchTags(settings: UserSettings) async -> [String: String] {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return [:] }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tags")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [:] }
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let tags = json["data"] as? [[String: Any]] {
+                var result: [String: String] = [:]
+                for tag in tags {
+                    if let id = tag["id"] as? String, let name = tag["name"] as? String {
+                        result[id] = name
+                    }
+                }
+                return result
+            }
+        } catch { return [:] }
+        return [:]
+    }
+
+    // 创建 tag，返回 tag id
+    func createTag(name: String, settings: UserSettings) async -> String? {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tags")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["name": name]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return nil }
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let d = json["data"] as? [String: Any] {
+                return d["id"] as? String
+            }
+        } catch { return nil }
+        return nil
+    }
+
+    // 确保 tag 存在（按名称查找，不存在则创建），返回 tag id
+    func ensureTag(name: String, settings: UserSettings) async -> String? {
+        let tags = await fetchTags(settings: settings)
+        if let existing = tags.first(where: { $0.value == name }) {
+            return existing.key
+        }
+        return await createTag(name: name, settings: settings)
+    }
+
+    // 重命名 tag
+    @discardableResult
+    func renameTag(tagId: String, name: String, settings: UserSettings) async -> Bool {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return false }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tags/\(tagId)")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["name": name]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return http.statusCode == 200
+        } catch { return false }
+    }
+
+    // MARK: - Todos (Top3 任务同步为 Habitica todo)
+
+    // 创建 todo，返回 task id
+    func createTodo(text: String, notes: String, tagIds: [String], settings: UserSettings) async -> String? {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + HabiticaConsts.pathUserTasks)!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["text": text, "type": "todo", "notes": notes, "tags": tagIds]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return nil }
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let d = json["data"] as? [String: Any] {
+                return d["id"] as? String
+            }
+        } catch { return nil }
+        return nil
+    }
+
+    // 更新 todo（标题 / tags）
+    func updateTodo(taskId: String, text: String?, tagIds: [String]?, settings: UserSettings) async -> Bool {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return false }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tasks/\(taskId)")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [:]
+        if let text = text { body["text"] = text }
+        if let tagIds = tagIds { body["tags"] = tagIds }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return http.statusCode == 200
+        } catch { return false }
+    }
+
+    // 完成 / 取消完成 todo
+    func scoreTodo(taskId: String, completed: Bool, settings: UserSettings) async -> Bool {
+        let direction = completed ? "up" : "down"
+        let result = await scoreHabit(taskId: taskId, direction: direction, settings: settings)
+        return result != nil
+    }
+
+    // 删除 todo
+    func deleteTodo(taskId: String, settings: UserSettings) async -> Bool {
+        guard settings.connectHabitica,
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return false }
+        let url = URL(string: configure(serverUrlOverride: settings.developerServerUrl) + "tasks/\(taskId)")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
+        req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
+        req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return http.statusCode == 200
+        } catch { return false }
     }
 }

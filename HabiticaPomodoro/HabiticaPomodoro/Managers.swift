@@ -357,11 +357,14 @@ class BlockProgressManager: ObservableObject {
     }
 }
 
-// MARK: - Top Three Manager (当天最重要的三件事，Work / MyOwn 两类)
+// MARK: - Top Three Manager (当天最重要的三件事 + 琐事，同步 Habitica)
 class TopThreeManager: ObservableObject {
     static let shared = TopThreeManager()
 
     @Published var store: TopThreeStore
+
+    // 前 2 个分类（Work/MyOwn）固定 3 槽位；第 3 个及以后（琐事）为自由列表
+    static let fixedSlotCategories = 2
 
     private let fileName = "habitica_pomodoro_top_three.json"
     private var fileURL: URL { PomodoroDataDir.fileURL(fileName) }
@@ -376,6 +379,22 @@ class TopThreeManager: ObservableObject {
         } else {
             store = TopThreeStore()
         }
+        // 旧数据升级：补齐琐事分类
+        if store.categoryNames.count < 3 {
+            store.categoryNames.append("Chores")
+            save()
+        }
+        // 旧数据升级：清除固定槽位模式遗留的空标题占位任务
+        var migrated = false
+        for (key, var day) in store.history {
+            for g in 0..<day.taskGroups.count {
+                let before = day.taskGroups[g].count
+                day.taskGroups[g].removeAll { $0.title.trimmingCharacters(in: .whitespaces).isEmpty }
+                if day.taskGroups[g].count != before { migrated = true }
+            }
+            if migrated { store.history[key] = day }
+        }
+        if migrated { save() }
     }
 
     private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
@@ -405,18 +424,13 @@ class TopThreeManager: ObservableObject {
 
     // MARK: 逻辑日：一天的开始 = 第一个 time block 的启动时间
     func logicalDateKey(settings: UserSettings, date: Date = Date()) -> String {
-        // 第一个块的开始时间（分钟）
         let boundaryMinutes = settings.blockTimeRanges.first?.startMinutes ?? 0
-
         let cal = Calendar.current
         let minuteOfDay = cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
-
-        // 如果当前时间在第一个块开始时间之前，逻辑上还是"昨天"
         var logical = date
         if minuteOfDay < boundaryMinutes {
             logical = cal.date(byAdding: .day, value: -1, to: date) ?? date
         }
-
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: logical)
@@ -450,13 +464,28 @@ class TopThreeManager: ObservableObject {
         return store.categoryNames[index]
     }
 
-    func setCategoryName(index: Int, name: String) {
-        guard index < store.categoryNames.count else { return }
-        store.categoryNames[index] = name
-        save()
+    func isFreeList(category: Int) -> Bool {
+        return category >= Self.fixedSlotCategories
     }
 
-    // MARK: 任务读写（按分类）
+    func setCategoryName(index: Int, name: String, settings: UserSettings) {
+        guard index < store.categoryNames.count else { return }
+        let oldName = store.categoryNames[index]
+        store.categoryNames[index] = name
+        // tag 映射跟随改名
+        if let tagId = store.categoryTagIds.removeValue(forKey: oldName) {
+            store.categoryTagIds[name] = tagId
+        }
+        save()
+        // 异步同步 Habitica tag 名称（复用已有 tag id 时更新名称）
+        Task {
+            if let tagId = store.categoryTagIds[name] {
+                await HabiticaAPI.shared.renameTag(tagId: tagId, name: name, settings: settings)
+            }
+        }
+    }
+
+    // MARK: 任务读写（按分类，统一为自由列表式交互；Work/MyOwn 上限 3 条）
     private func ensureDay(key: String) {
         if store.history[key] == nil {
             store.history[key] = TopThreeDay(date: key)
@@ -465,13 +494,34 @@ class TopThreeManager: ObservableObject {
         while day.taskGroups.count < categoryCount {
             day.taskGroups.append([])
         }
-        // 每组补齐 3 个槽位
-        for i in 0..<day.taskGroups.count {
-            while day.taskGroups[i].count < 3 {
-                day.taskGroups[i].append(TopThreeTask(title: ""))
-            }
-        }
         store.history[key] = day
+    }
+
+    // 任务上限：固定分类（Work/MyOwn）最多 3 条，琐事不限
+    func taskLimit(category: Int) -> Int? {
+        return isFreeList(category: category) ? nil : 3
+    }
+
+    func canAddTask(key: String, category: Int, settings: UserSettings) -> Bool {
+        guard isEditable(key: key, settings: settings) else { return false }
+        if let limit = taskLimit(category: category) {
+            return getTasks(key: key, category: category).count < limit
+        }
+        return true
+    }
+
+    // 统一添加任务（所有分类相同交互）
+    func addTask(key: String, category: Int, title: String, settings: UserSettings) {
+        guard canAddTask(key: key, category: category, settings: settings) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        ensureDay(key: key)
+        var day = store.history[key]!
+        let task = TopThreeTask(title: trimmed)
+        day.taskGroups[category].append(task)
+        store.history[key] = day
+        save()
+        syncTaskToHabitica(task: task, category: category, key: key, settings: settings)
     }
 
     func setTaskTitle(key: String, category: Int, index: Int, title: String, settings: UserSettings) {
@@ -480,9 +530,14 @@ class TopThreeManager: ObservableObject {
         guard var day = store.history[key],
               category < day.taskGroups.count,
               index < day.taskGroups[category].count else { return }
-        day.taskGroups[category][index].title = title
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        day.taskGroups[category][index].title = trimmed
         store.history[key] = day
         save()
+        let task = day.taskGroups[category][index]
+        if !trimmed.isEmpty {
+            syncTaskToHabitica(task: task, category: category, key: key, settings: settings)
+        }
     }
 
     func toggleTask(key: String, category: Int, index: Int, settings: UserSettings) {
@@ -494,18 +549,140 @@ class TopThreeManager: ObservableObject {
         day.taskGroups[category][index].isCompleted.toggle()
         store.history[key] = day
         save()
+        let task = day.taskGroups[category][index]
+        syncCompletionToHabitica(task: task, settings: settings)
     }
 
     func getTasks(key: String, category: Int) -> [TopThreeTask] {
         if let day = store.history[key],
            category < day.taskGroups.count {
-            var tasks = day.taskGroups[category]
-            while tasks.count < 3 {
-                tasks.append(TopThreeTask(title: ""))
-            }
-            return tasks
+            return day.taskGroups[category]
         }
-        return Array(repeating: TopThreeTask(title: ""), count: 3)
+        return []
+    }
+
+    // 统一删除任务（所有分类相同交互）
+    func removeTask(key: String, category: Int, index: Int, settings: UserSettings) {
+        guard isEditable(key: key, settings: settings) else { return }
+        ensureDay(key: key)
+        guard var day = store.history[key],
+              category < day.taskGroups.count,
+              index < day.taskGroups[category].count else { return }
+        let task = day.taskGroups[category].remove(at: index)
+        store.history[key] = day
+        save()
+        // 删除 Habitica todo
+        if let todoId = task.habiticaTaskId {
+            Task {
+                _ = await HabiticaAPI.shared.deleteTodo(taskId: todoId, settings: settings)
+            }
+        }
+    }
+
+    // MARK: 昨天未完成任务移动到今日
+
+    func canMoveToToday(key: String, settings: UserSettings) -> Bool {
+        return key == yesterdayKey(settings: settings)
+    }
+
+    @discardableResult
+    func moveTaskToToday(fromKey: String, category: Int, index: Int, settings: UserSettings) -> Bool {
+        guard canMoveToToday(key: fromKey, settings: settings) else { return false }
+        ensureDay(key: fromKey)
+        let todayK = todayKey(settings: settings)
+        ensureDay(key: todayK)
+
+        guard var srcDay = store.history[fromKey],
+              category < srcDay.taskGroups.count,
+              index < srcDay.taskGroups[category].count else { return false }
+        let task = srcDay.taskGroups[category][index]
+        guard !task.isCompleted, !task.movedToToday, !task.title.isEmpty else { return false }
+
+        var dstDay = store.history[todayK]!
+        // 统一为自由列表：直接追加（固定分类受 3 条上限约束）
+        if let limit = taskLimit(category: category),
+           dstDay.taskGroups[category].count >= limit {
+            return false // 今日该分类已满
+        }
+        var moved = task
+        moved.movedToToday = false
+        dstDay.taskGroups[category].append(moved)
+
+        // 标记昨天任务已移动
+        srcDay.taskGroups[category][index].movedToToday = true
+        store.history[fromKey] = srcDay
+        store.history[todayK] = dstDay
+        save()
+        return true
+    }
+
+    // MARK: - Habitica 同步
+
+    // 确保分类对应的 Habitica tag 存在，返回 tag id
+    func ensureTagId(category: Int, settings: UserSettings) async -> String? {
+        guard settings.connectHabitica, !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        let name = categoryName(index: category)
+        if let cached = store.categoryTagIds[name], !cached.isEmpty {
+            return cached
+        }
+        if let tagId = await HabiticaAPI.shared.ensureTag(name: name, settings: settings) {
+            await MainActor.run {
+                store.categoryTagIds[name] = tagId
+                save()
+            }
+            return tagId
+        }
+        return nil
+    }
+
+    // 创建/更新任务的 Habitica todo
+    private func syncTaskToHabitica(task: TopThreeTask, category: Int, key: String, settings: UserSettings) {
+        guard settings.connectHabitica, !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return }
+        let catName = categoryName(index: category)
+        Task {
+            let tagIds: [String]
+            if let tagId = await ensureTagId(category: category, settings: settings) {
+                tagIds = [tagId]
+            } else {
+                tagIds = []
+            }
+            if let todoId = task.habiticaTaskId {
+                // 更新标题和 tags
+                let ok = await HabiticaAPI.shared.updateTodo(taskId: todoId, text: task.title, tagIds: tagIds, settings: settings)
+                print("Habitica update todo \(todoId): \(ok)")
+            } else {
+                // 创建 todo
+                let notes = "From HabiticaPomodoro Top3 · \(catName) · \(key)"
+                if let todoId = await HabiticaAPI.shared.createTodo(text: task.title, notes: notes, tagIds: tagIds, settings: settings) {
+                    await MainActor.run {
+                        // 按任务 UUID 回写 habiticaTaskId
+                        for (dateKey, var day) in store.history {
+                            var changed = false
+                            for g in 0..<day.taskGroups.count {
+                                for t in 0..<day.taskGroups[g].count where day.taskGroups[g][t].id == task.id {
+                                    day.taskGroups[g][t].habiticaTaskId = todoId
+                                    changed = true
+                                }
+                            }
+                            if changed { store.history[dateKey] = day }
+                        }
+                        save()
+                    }
+                    print("Habitica todo created: \(todoId) for \(task.title)")
+                }
+            }
+        }
+    }
+
+    // 同步完成状态到 Habitica
+    private func syncCompletionToHabitica(task: TopThreeTask, settings: UserSettings) {
+        guard settings.connectHabitica, !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return }
+        guard let todoId = task.habiticaTaskId else { return }
+        let completed = task.isCompleted
+        Task {
+            let ok = await HabiticaAPI.shared.scoreTodo(taskId: todoId, completed: completed, settings: settings)
+            print("Habitica score todo \(todoId) completed=\(completed): \(ok)")
+        }
     }
 }
 
