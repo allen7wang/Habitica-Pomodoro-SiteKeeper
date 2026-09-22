@@ -278,6 +278,19 @@ class PomodoroEngine: ObservableObject {
         updateTomato()
     }
 
+    // MARK: - Toggle Start/Pause (快捷键 ⌘⇧P)
+    // 已暂停 → 继续；番茄进行中 → 暂停；其余情况 → 启动番茄
+    func togglePomodoro() {
+        if isFrozen {
+            unfreeze()
+        } else if isRunning && phase == .pomodoro {
+            freeze()
+        } else {
+            activate()
+        }
+        NotificationCenter.default.post(name: .badgeUpdate, object: nil)
+    }
+
     // MARK: - Freeze / Unfreeze
     func freeze() {
         isFrozen = true

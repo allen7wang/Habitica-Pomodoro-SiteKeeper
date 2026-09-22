@@ -13,6 +13,27 @@ struct HabiticaPomodoroApp: App {
         Settings {
             SettingsView()
         }
+        .commands {
+            // Pomodoro 菜单: ⌘⇧P 启动/暂停
+            CommandMenu("Pomodoro") {
+                Button("Start/Pause Pomodoro") {
+                    PomodoroEngine.shared.togglePomodoro()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            }
+            // View 菜单: ⌘1-5 切换 Tab
+            CommandMenu("Go") {
+                ForEach(Array(AppTabState.tabTitles.enumerated()), id: \.offset) { index, title in
+                    Button(title) {
+                        AppTabState.shared.selectedTab = index
+                        if let delegate = NSApp.delegate as? AppDelegate {
+                            delegate.ensureTimerWindowVisible()
+                        }
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command])
+                }
+            }
+        }
     }
 }
 
@@ -72,6 +93,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Start with timer window visible
         showTimerWindow()
+    }
+
+    // 供快捷键使用：确保主窗口可见
+    func ensureTimerWindowVisible() {
+        if timerWindow?.isVisible != true {
+            showTimerWindow()
+        } else {
+            timerWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     @objc func handleBadgeUpdate() {
@@ -191,12 +222,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
-    @State private var selectedTab = 0 // 0 = Pomo, 1 = Task, 2 = Habits, 3 = Dailies, 4 = Profile
+    @ObservedObject var tabState = AppTabState.shared
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab 切换: Pomo / Task / Habits / Dailies / Profile
-            Picker("", selection: $selectedTab) {
+            // Tab 切换: Pomo / Task / Habits / Dailies / Profile (⌘1-5 快捷键)
+            Picker("", selection: $tabState.selectedTab) {
                 Text("Pomo").tag(0)
                 Text("Task").tag(1)
                 Text("Habits").tag(2)
@@ -208,7 +239,7 @@ struct TimerView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
 
-            switch selectedTab {
+            switch tabState.selectedTab {
             case 0: pomoTab
             case 1: taskTab
             case 2: HabiticaHabitsView()
