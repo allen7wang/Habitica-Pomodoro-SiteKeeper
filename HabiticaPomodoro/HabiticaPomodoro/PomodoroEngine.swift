@@ -33,12 +33,20 @@ class PomodoroEngine: ObservableObject {
 
     // Internal
     private var timer: Timer?
+    private var duringHandler: (() -> Void)?
+    private var endHandler: (() -> Void)?
+    /// 当前阶段的绝对结束时刻（iOS 后台 Timer 会被挂起，回前台据此重算剩余时间）
+    private(set) var phaseEndsAt: Date?
     private var pomodoroTaskId: String?
     private var pomodoroSetTaskId: String?
     private var api = HabiticaAPI.shared
     private var settingsManager = SettingsManager.shared
     private var audioManager = AudioManager.shared
     private var histogramManager = HistogramManager.shared
+
+    #if os(iOS)
+    static let backgroundEndNotificationId = "pomo-phase-end"
+    #endif
 
     var settings: UserSettings { settingsManager.settings }
 
@@ -62,6 +70,9 @@ class PomodoroEngine: ObservableObject {
 
     // MARK: - Start Pomodoro
     func startPomodoro() {
+        #if os(iOS)
+        requestNotificationPermissionIfNeeded()
+        #endif
         stopTimer()
         let duration = settings.pomoDurationMins * 60
         isRunning = true
@@ -348,6 +359,12 @@ class PomodoroEngine: ObservableObject {
         var remaining = duration
         timerValue = remaining
         timerString = formatTime(remaining)
+        duringHandler = during
+        endHandler = end
+        phaseEndsAt = Date().addingTimeInterval(TimeInterval(duration))
+        #if os(iOS)
+        scheduleBackgroundEndNotification(after: TimeInterval(duration))
+        #endif
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
             guard let self = self else { t.invalidate(); return }
             remaining -= 1
@@ -357,14 +374,98 @@ class PomodoroEngine: ObservableObject {
             if remaining <= 0 {
                 t.invalidate()
                 self.timer = nil
+                self.phaseEndsAt = nil
+                #if os(iOS)
+                self.cancelBackgroundEndNotification()
+                #endif
                 end()
             }
         }
     }
 
+    /// iOS：应用回到前台时按 phaseEndsAt 重算剩余时间。
+    /// 后台期间 Timer 被系统挂起，若不重同步，番茄会一直停在进入后台的时刻。
+    func resyncAfterForeground(chain: Int = 0) {
+        guard isRunning, !isFrozen, let endsAt = phaseEndsAt else { return }
+        let remaining = Int(ceil(endsAt.timeIntervalSince(Date())))
+        timer?.invalidate()
+        timer = nil
+
+        if remaining > 0 {
+            // 阶段尚未结束：用真实剩余时间重建计时器
+            timerValue = remaining
+            timerString = formatTime(remaining)
+            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
+                guard let self = self else { t.invalidate(); return }
+                self.timerValue -= 1
+                self.timerString = self.formatTime(max(0, self.timerValue))
+                self.duringHandler?()
+                if self.timerValue <= 0 {
+                    t.invalidate()
+                    self.timer = nil
+                    self.phaseEndsAt = nil
+                    self.endHandler?()
+                }
+            }
+            return
+        }
+
+        // 后台期间阶段已结束 → 触发结束逻辑（Habitica 计分、统计、进入休息等）
+        phaseEndsAt = nil
+        #if os(iOS)
+        cancelBackgroundEndNotification()
+        #endif
+        endHandler?()
+
+        // 连锁处理（如后台跨过了 番茄结束→休息结束），限制深度避免失控
+        if chain < 6 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.resyncAfterForeground(chain: chain + 1)
+            }
+        }
+    }
+
+    #if os(iOS)
+    // 首次启动番茄时请求通知权限（懒加载，避免启动即弹窗）
+    private static var permissionRequested = false
+    private func requestNotificationPermissionIfNeeded() {
+        guard !Self.permissionRequested else { return }
+        Self.permissionRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+
+    // 后台/锁屏时通过本地通知告知阶段结束（Timer 挂起时用户仍能被提醒）
+    private func scheduleBackgroundEndNotification(after interval: TimeInterval) {
+        cancelBackgroundEndNotification()
+        let content = UNMutableNotificationContent()
+        switch phase {
+        case .pomodoro:
+            content.title = "Time's Up"
+            content.body = "番茄钟结束，休息一下 🍅"
+        case .breakTime, .breakExtension:
+            content.title = "Time's Up"
+            content.body = "休息结束，回到工作"
+        default:
+            return
+        }
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, interval), repeats: false)
+        let req = UNNotificationRequest(identifier: Self.backgroundEndNotificationId, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(req)
+    }
+
+    private func cancelBackgroundEndNotification() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.backgroundEndNotificationId])
+    }
+    #endif
+
     private func stopTimer() {
         timer?.invalidate()
         timer = nil
+        phaseEndsAt = nil
+        #if os(iOS)
+        cancelBackgroundEndNotification()
+        #endif
         timerString = "00:00"
         isRunning = false
         phase = .idle
@@ -375,6 +476,10 @@ class PomodoroEngine: ObservableObject {
     private func pauseTimer() {
         timer?.invalidate()
         timer = nil
+        phaseEndsAt = nil
+        #if os(iOS)
+        cancelBackgroundEndNotification()
+        #endif
     }
 
     // MARK: - Tomato state

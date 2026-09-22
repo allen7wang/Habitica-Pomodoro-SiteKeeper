@@ -138,7 +138,7 @@ struct TopThreeCategorySection: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.caption.bold())
                     .frame(width: 120)
-                    .onExitCommand { renamingCategory = false }
+                    .cancelOnExitCommand { renamingCategory = false }
                 } else {
                     HStack(spacing: 4) {
                         Text(manager.categoryName(index: category))
@@ -264,7 +264,7 @@ struct TaskRow: View {
                 TextField("输入任务...", text: $draftTitle, onCommit: onCommitEdit)
                     .textFieldStyle(.roundedBorder)
                     .font(.callout)
-                    .onExitCommand { onCancelEdit() }
+                    .cancelOnExitCommand { onCancelEdit() }
             } else {
                 Text(displayTitle)
                     .font(.callout)

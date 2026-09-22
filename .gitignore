@@ -191,3 +191,8 @@ GeneratedArtifacts/
 _Pvt_Extensions/
 ModelManifest.xml
 /Penalizer/app/img/Thumbs.db
+
+# iOS (xcodegen 生成，不入库)
+HabiticaPomodoro/HabiticaPomodoroMobile.xcodeproj/
+# 遗留的半成品工程目录（由 project.yml + xcodegen 取代）
+HabiticaPomodoro/HabiticaPomodoro.xcodeproj/

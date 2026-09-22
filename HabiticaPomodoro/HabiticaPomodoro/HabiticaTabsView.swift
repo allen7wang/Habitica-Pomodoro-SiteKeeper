@@ -149,7 +149,7 @@ struct HabitRow: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 44)
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(Color.cardBackground)
 
             // 加分按钮
             Button(action: { onScore("up") }) {
@@ -286,7 +286,7 @@ struct DailyRow: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(item.completed ? Color.green.opacity(0.07) : Color(NSColor.controlBackgroundColor))
+                .fill(item.completed ? Color.green.opacity(0.07) : Color.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)

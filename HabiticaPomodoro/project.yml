@@ -1,0 +1,50 @@
+name: HabiticaPomodoroMobile
+options:
+  bundleIdPrefix: com.hermes
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: 1
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  HabiticaPomodoroMobile:
+    type: application
+    platform: iOS
+    sources:
+      # iOS 专属入口与界面
+      - path: iOS
+      # 跨平台共享核心
+      - path: HabiticaPomodoro/PlatformCompat.swift
+      - path: HabiticaPomodoro/AppTabState.swift
+      - path: HabiticaPomodoro/PomodoroEngine.swift
+      - path: HabiticaPomodoro/Managers.swift
+      - path: HabiticaPomodoro/HabiticaAPI.swift
+      - path: HabiticaPomodoro/TopThreeView.swift
+      - path: HabiticaPomodoro/HabiticaTabsView.swift
+      - path: HabiticaPomodoro/BlockNotificationManager.swift
+      - path: HabiticaPomodoro/BlockRewardManager.swift
+      # 音频资源（folder 引用，保持 audio/ 子目录结构）
+      - path: HabiticaPomodoro/audio
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hermes.habitica-pomodoro.ios
+        PRODUCT_NAME: HabiticaPomodoro
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
