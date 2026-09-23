@@ -29,6 +29,19 @@ enum PomodoroDataDir {
         url.appendingPathComponent(fileName)
     }
 
+    #if os(iOS)
+    /// iOS 端 iCloud 变更检测基线回调：本地写入后调用，
+    /// 避免把自己的写入误判为"远端同步下来的变更"而触发无谓重载。
+    static var onLocalWrite: (() -> Void)?
+    #endif
+
+    /// 各 Manager 写文件成功后调用（跨平台安全，macOS 上为空操作）
+    static func noteLocalWrite() {
+        #if os(iOS)
+        onLocalWrite?()
+        #endif
+    }
+
     // 一次性迁移：把旧的散落在 Documents 根目录的文件移入隐藏文件夹
     static func migrateOldFiles() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -101,6 +114,7 @@ class SettingsManager: ObservableObject {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             }
             try data.write(to: url)
+            PomodoroDataDir.noteLocalWrite()
             print("Saved to: \(url.path)")
             return true
         } catch {
@@ -216,6 +230,7 @@ class BlockProgressManager: ObservableObject {
                 jsonData = try JSONEncoder().encode(data)
             }
             try jsonData.write(to: url)
+            PomodoroDataDir.noteLocalWrite()
             print("Saved to: \(url.path)")
             return true
         } catch {
@@ -467,6 +482,7 @@ class TopThreeManager: ObservableObject {
             }
             let jsonData = try JSONEncoder().encode(store)
             try jsonData.write(to: url)
+            PomodoroDataDir.noteLocalWrite()
             UserDefaults.standard.set(jsonData, forKey: localBackupKey)
             print("TopThree saved to: \(url.path)")
         } catch {

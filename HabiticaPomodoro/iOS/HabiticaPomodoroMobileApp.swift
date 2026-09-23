@@ -21,6 +21,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // 必须最先执行：解析 iCloud Drive 文件夹授权 bookmark，
         // 保证之后任何 Manager 首次初始化时 PomodoroDataDir.url 已指向 iCloud 目录
         _ = ICloudFolderGrant.shared
+        // DEBUG 构建支持 -grantFolder <path> 启动参数授权（自动化验证用）
+        ICloudFolderGrant.shared.handleLaunchArguments()
 
         // 通知 delegate（前台也展示横幅）；权限在首次启动番茄时再请求（懒加载，避免启动即弹窗）
         UNUserNotificationCenter.current().delegate = self
@@ -33,12 +35,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         Task { await PomodoroEngine.shared.initHabiticaTasks() }
         PomodoroEngine.shared.loadTodayCount()
 
-        // 回前台重同步计时器（后台 Timer 被挂起后按绝对结束时刻校正）
+        // 回前台重同步：计时器校正 + 检测 iCloud 是否同步来了 Mac 端的新数据
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { _ in
             PomodoroEngine.shared.resyncAfterForeground()
             PomodoroEngine.shared.loadTodayCount()
+            ICloudFolderGrant.shared.syncFromCloudIfNeeded()
         }
         return true
     }
