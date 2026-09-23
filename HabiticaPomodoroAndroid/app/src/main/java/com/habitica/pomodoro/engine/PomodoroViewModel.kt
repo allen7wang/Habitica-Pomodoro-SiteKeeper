@@ -319,24 +319,26 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val limit = if (categoryIndex < FIXED_SLOT_CATEGORIES) MAX_FIXED_TASKS else Int.MAX_VALUE
 
         val todayKey = store.logicalDateKey(settings)
-        val day = s.history[todayKey]?.copy() ?: newDay(todayKey, s.categoryNames.size)
-        while (day.taskGroups.size <= categoryIndex) day.taskGroups.add(mutableListOf())
-        if (day.taskGroups[categoryIndex].size >= limit) {
+        val day = s.history[todayKey] ?: newDay(todayKey, s.categoryNames.size)
+        val groups = day.taskGroups.toMutableList()
+        while (groups.size <= categoryIndex) groups.add(emptyList())
+        val group = groups[categoryIndex].toMutableList()
+        if (group.size >= limit) {
             _state.value = _state.value.copy(message = "该分类最多 $limit 条任务")
             return
         }
-        day.taskGroups[categoryIndex].add(
-            com.habitica.pomodoro.data.TopThreeTask(title = trimmed),
-        )
-        s.history[todayKey] = day
-        persistStore(s)
-        syncTaskToHabitica(categoryIndex, day.taskGroups[categoryIndex].last())
+        val newTask = com.habitica.pomodoro.data.TopThreeTask(title = trimmed)
+        group.add(newTask)
+        groups[categoryIndex] = group
+        val newStore = s.copy(history = s.history + (todayKey to day.copy(taskGroups = groups)))
+        persistStore(newStore)
+        syncTaskToHabitica(categoryIndex, newTask)
     }
 
     private fun newDay(date: String, categoryCount: Int) =
         com.habitica.pomodoro.data.TopThreeDay(
             date = date,
-            taskGroups = MutableList(categoryCount) { mutableListOf() },
+            taskGroups = List(categoryCount) { emptyList() },
         )
 
     fun toggleTask(categoryIndex: Int, taskIndex: Int) {
@@ -345,12 +347,18 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val todayKey = store.logicalDateKey(settings)
         val day = s.history[todayKey] ?: return
         val task = day.taskGroups.getOrNull(categoryIndex)?.getOrNull(taskIndex) ?: return
-        task.isCompleted = !task.isCompleted
-        persistStore(s)
+        val newCompleted = !task.isCompleted
+        val newGroups = day.taskGroups.mapIndexed { gi, g ->
+            if (gi == categoryIndex) g.mapIndexed { ti, t ->
+                if (ti == taskIndex) t.copy(isCompleted = newCompleted) else t
+            } else g
+        }
+        val newStore = s.copy(history = s.history + (todayKey to day.copy(taskGroups = newGroups)))
+        persistStore(newStore)
         // 完成 → score up；取消完成 → score down（与 Swift 端一致）
         task.habiticaTaskId?.let { id ->
             viewModelScope.launch {
-                HabiticaAPI.scoreTask(settings, id, if (task.isCompleted) "up" else "down")
+                HabiticaAPI.scoreTask(settings, id, if (newCompleted) "up" else "down")
                 refreshProfile()
             }
         }
@@ -361,10 +369,12 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val settings = _state.value.settings
         val todayKey = store.logicalDateKey(settings)
         val day = s.history[todayKey] ?: return
-        val group = day.taskGroups.getOrNull(categoryIndex) ?: return
-        if (taskIndex !in group.indices) return
-        val task = group.removeAt(taskIndex)
-        persistStore(s)
+        val task = day.taskGroups.getOrNull(categoryIndex)?.getOrNull(taskIndex) ?: return
+        val newGroups = day.taskGroups.mapIndexed { gi, g ->
+            if (gi == categoryIndex) g.filterIndexed { ti, _ -> ti != taskIndex } else g
+        }
+        val newStore = s.copy(history = s.history + (todayKey to day.copy(taskGroups = newGroups)))
+        persistStore(newStore)
         task.habiticaTaskId?.let { id ->
             viewModelScope.launch { HabiticaAPI.deleteTodo(settings, id) }
         }
@@ -378,20 +388,32 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val todayKey = store.logicalDateKey(settings)
         val yesterday = s.history[yesterdayKey] ?: return
         val task = yesterday.taskGroups.getOrNull(categoryIndex)?.getOrNull(taskIndex) ?: return
-        if (task.isCompleted) return
+        if (task.isCompleted || task.movedToToday) return
 
-        val today = s.history[todayKey]?.copy() ?: newDay(todayKey, s.categoryNames.size)
-        while (today.taskGroups.size <= categoryIndex) today.taskGroups.add(mutableListOf())
         val limit = if (categoryIndex < FIXED_SLOT_CATEGORIES) MAX_FIXED_TASKS else Int.MAX_VALUE
-        if (today.taskGroups[categoryIndex].size >= limit) {
+        val today = s.history[todayKey] ?: newDay(todayKey, s.categoryNames.size)
+        val tGroups = today.taskGroups.toMutableList()
+        while (tGroups.size <= categoryIndex) tGroups.add(emptyList())
+        val tGroup = tGroups[categoryIndex].toMutableList()
+        if (tGroup.size >= limit) {
             _state.value = _state.value.copy(message = "今天的该分类已满 $limit 条")
             return
         }
-        // 标记原任务已移动，追加到今天（保留 Habitica todo 关联）
-        task.movedToToday = true
-        today.taskGroups[categoryIndex].add(task.copy(movedToToday = false))
-        s.history[todayKey] = today
-        persistStore(s)
+        tGroup.add(task.copy(movedToToday = false))
+        tGroups[categoryIndex] = tGroup
+
+        // 标记原任务已移动
+        val yGroups = yesterday.taskGroups.mapIndexed { gi, g ->
+            if (gi == categoryIndex) g.mapIndexed { ti, t ->
+                if (ti == taskIndex) t.copy(movedToToday = true) else t
+            } else g
+        }
+        val newStore = s.copy(
+            history = s.history +
+                (yesterdayKey to yesterday.copy(taskGroups = yGroups)) +
+                (todayKey to today.copy(taskGroups = tGroups)),
+        )
+        persistStore(newStore)
     }
 
     fun renameCategory(index: Int, newName: String) {
@@ -400,15 +422,16 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value.store
         val oldName = s.categoryNames.getOrNull(index) ?: return
         if (oldName == trimmed) return
-        s.categoryNames[index] = trimmed
+        val newNames = s.categoryNames.mapIndexed { i, n -> if (i == index) trimmed else n }
+        val newTagIds = s.categoryTagIds.toMutableMap()
+        val tagId = newTagIds.remove(oldName)
+        if (tagId != null) newTagIds[trimmed] = tagId
+        persistStore(s.copy(categoryNames = newNames, categoryTagIds = newTagIds))
         // tag 映射跟随改名；已有 tag 同步重命名
-        val tagId = s.categoryTagIds.remove(oldName)
         if (tagId != null) {
-            s.categoryTagIds[trimmed] = tagId
             val settings = _state.value.settings
             viewModelScope.launch { HabiticaAPI.updateTag(settings, tagId, trimmed) }
         }
-        persistStore(s)
     }
 
     private fun persistStore(s: TopThreeStore) {
@@ -437,13 +460,29 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
             if (created is HabiticaAPI.Result.Success) {
                 val id = created.value
                 if (id != null) {
-                    // 回写 habiticaTaskId，保证后续完成/删除能同步
+                    // 回写 habiticaTaskId（不可变链：构造新 store），保证后续完成/删除能同步
                     val s = _state.value.store
                     val todayKey = store.logicalDateKey(settings)
-                    s.history[todayKey]?.taskGroups?.getOrNull(categoryIndex)
-                        ?.firstOrNull { it.id == task.id }?.habiticaTaskId = id
-                    tagResult.let { if (it is HabiticaAPI.Result.Success) it.value?.let { tid -> s.categoryTagIds[categoryName] = tid } }
-                    persistStore(s)
+                    val day = s.history[todayKey]
+                    if (day != null) {
+                        val newGroups = day.taskGroups.mapIndexed { gi, g ->
+                            if (gi == categoryIndex) g.map { t ->
+                                if (t.id == task.id) t.copy(habiticaTaskId = id) else t
+                            } else g
+                        }
+                        var newTagIds = s.categoryTagIds
+                        if (tagResult is HabiticaAPI.Result.Success) {
+                            tagResult.value?.let { tid ->
+                                newTagIds = newTagIds + (categoryName to tid)
+                            }
+                        }
+                        persistStore(
+                            s.copy(
+                                history = s.history + (todayKey to day.copy(taskGroups = newGroups)),
+                                categoryTagIds = newTagIds,
+                            ),
+                        )
+                    }
                 }
             }
             _state.value = _state.value.copy(habiticaBusy = false)

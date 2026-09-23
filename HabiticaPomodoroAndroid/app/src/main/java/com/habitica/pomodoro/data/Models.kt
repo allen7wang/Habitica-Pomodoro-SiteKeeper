@@ -110,13 +110,15 @@ data class BlockTimeRange(
 
 // MARK: - Top Three（每日三件事 / 琐事）
 
-/** 注意：Swift 端 UUID 序列化为大写连字符格式，这里保持一致以便 Habitica 侧对齐 */
+/** 注意：Swift 端 UUID 序列化为大写连字符格式，这里保持一致以便 Habitica 侧对齐。
+ *  全字段 val（不可变）：ViewModel 状态持有实例，原地 mutate 会让 StateFlow 判定
+ *  新旧值相等而吞掉发射（UI 不刷新），因此更新一律走 copy()。 */
 data class TopThreeTask(
     val id: String = UUID.randomUUID().toString().uppercase(),
-    var title: String = "",
-    var isCompleted: Boolean = false,
-    var habiticaTaskId: String? = null,
-    var movedToToday: Boolean = false,
+    val title: String = "",
+    val isCompleted: Boolean = false,
+    val habiticaTaskId: String? = null,
+    val movedToToday: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -139,8 +141,8 @@ data class TopThreeTask(
 
 /** 一天（逻辑日）的任务，按分类分组：Work/MyOwn 固定 3 槽，第 3 个及以后为自由列表 */
 data class TopThreeDay(
-    var date: String,
-    var taskGroups: MutableList<MutableList<TopThreeTask>> = mutableListOf(),
+    val date: String,
+    val taskGroups: List<List<TopThreeTask>> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("date", date)
@@ -153,7 +155,7 @@ data class TopThreeDay(
 
     companion object {
         fun fromJson(json: JSONObject): TopThreeDay {
-            val groups = mutableListOf<MutableList<TopThreeTask>>()
+            val groups = mutableListOf<List<TopThreeTask>>()
             json.optJSONArray("taskGroups")?.let { outer ->
                 for (i in 0 until outer.length()) {
                     val inner = outer.optJSONArray(i) ?: continue
@@ -171,9 +173,9 @@ data class TopThreeDay(
 
 /** 持久化单元：分类名可自定义 + Habitica tag 映射 + 历史 */
 data class TopThreeStore(
-    var categoryNames: MutableList<String> = mutableListOf("Work", "MyOwn", "Chores"),
-    var categoryTagIds: MutableMap<String, String> = mutableMapOf(),
-    var history: MutableMap<String, TopThreeDay> = mutableMapOf(),
+    val categoryNames: List<String> = listOf("Work", "MyOwn", "Chores"),
+    val categoryTagIds: Map<String, String> = emptyMap(),
+    val history: Map<String, TopThreeDay> = emptyMap(),
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("categoryNames", JSONArray(categoryNames))
