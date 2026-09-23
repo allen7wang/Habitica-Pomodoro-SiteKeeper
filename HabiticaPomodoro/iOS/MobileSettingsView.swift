@@ -108,10 +108,20 @@ struct ICloudSyncSection: View {
 
             if grant.isConnected, let dir = grant.dataFolderURL {
                 LabeledContent("数据目录") {
-                    Text(dir.lastPathComponent)
+                    Text(grant.dataFolderDescription)
                         .font(.caption).foregroundColor(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
-                Text("数据文件与 Mac 版共用同一个 iCloud Drive 文件夹。首次请在 Files 中选择 iCloud Drive → Documents（`.` 开头的文件夹在 Files 中不可见，App 会自动在其中定位 .habitica-pomodoro）。")
+                if grant.dataFileCount > 0 {
+                    Text("✅ 已找到 \(grant.dataFileCount) 个数据文件，与 Mac 版共用同一份数据。")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                } else {
+                    Text("⚠️ 该目录下没有数据文件。请确认 Mac 端已运行过应用，且选择的是 iCloud Drive → Documents（不是其他文件夹）。")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+                Text("提示：`.habitica-pomodoro` 是隐藏文件夹，Files 里看不到也选不了它——只需选择它的父文件夹（iCloud Drive 或 iCloud Drive/Documents 都可以，App 会自动定位）。")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {

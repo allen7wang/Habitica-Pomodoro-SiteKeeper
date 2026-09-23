@@ -41,15 +41,57 @@ final class ICloudFolderGrant: ObservableObject {
 
     var isConnected: Bool { grantedRoot != nil }
 
-    /// 数据文件夹：授权根目录下的 `.habitica-pomodoro`（不存在则创建）
+    private static let dataFileNames = [
+        "habitica_pomodoro_settings.json",
+        "habitica_pomodoro_block_progress.json",
+        "habitica_pomodoro_block_history.json",
+        "habitica_pomodoro_daily_blocks.json",
+        "habitica_pomodoro_top_three.json",
+    ]
+
+    /// 数据文件夹：在授权目录内定位 `.habitica-pomodoro`。
+    ///
+    /// Files 选择器里看不到 `.` 开头的隐藏文件夹，用户只能选父级，而父级可能是
+    /// iCloud Drive 根，也可能是里面的 Documents —— 两者都合法，所以这里做智能定位：
+    /// 1. 优先「已存在且有数据文件」的目录（保证接上 Mac 端已有的那批 JSON）
+    /// 2. 其次「父级本身叫 Documents」时直接用 <root>/.habitica-pomodoro
+    /// 3. 父级是 iCloud Drive 根且里面有 Documents 时，用 <root>/Documents/.habitica-pomodoro
+    ///    （与 macOS 的 ~/Documents/.habitica-pomodoro 对齐，避免数据分叉）
+    /// 4. 都不匹配才在 <root>/.habitica-pomodoro 新建
     var dataFolderURL: URL? {
         guard let root = grantedRoot else { return nil }
-        let dir = root.appendingPathComponent(PomodoroDataDir.folderName)
+        let dir = Self.resolveDataFolder(under: root, fm: fm)
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
     }
+
+    private static func resolveDataFolder(under root: URL, fm: FileManager) -> URL {
+        let folder = PomodoroDataDir.folderName
+        let inRoot = root.appendingPathComponent(folder)
+        let inDocuments = root.appendingPathComponent("Documents").appendingPathComponent(folder)
+
+        func hasData(_ url: URL) -> Bool {
+            dataFileNames.contains { fm.fileExists(atPath: url.appendingPathComponent($0).path) }
+        }
+        // 1. 已有数据者优先
+        if hasData(inRoot) { return inRoot }
+        if hasData(inDocuments) { return inDocuments }
+        // 2. 父级本身就是 Documents
+        if root.lastPathComponent == "Documents" { return inRoot }
+        // 3. 父级是 iCloud Drive 根且含 Documents 子目录 → 对齐 macOS 路径
+        var isDir: ObjCBool = false
+        let docsDir = root.appendingPathComponent("Documents")
+        if fm.fileExists(atPath: docsDir.path, isDirectory: &isDir), isDir.boolValue {
+            return inDocuments
+        }
+        // 4. 兜底
+        return inRoot
+    }
+
+    /// 数据目录里已存在的数据文件数量（用于 UI 反馈"是否接上了 Mac 的数据"）
+    @Published private(set) var dataFileCount: Int = 0
 
     /// 授权根目录的显示名（iCloud Drive 里的 Documents 等）
     private var rootDisplayName: String {
@@ -59,11 +101,31 @@ final class ICloudFolderGrant: ObservableObject {
         return last == "Documents" ? "iCloud Drive/Documents" : last
     }
 
+    /// 数据目录的可读描述，如 "iCloud Drive/Documents/.habitica-pomodoro"
+    var dataFolderDescription: String {
+        guard let dir = dataFolderURL else { return "—" }
+        return "\(rootDisplayName)/\(dir.lastPathComponent)"
+    }
+
     private func refreshStatus() {
-        if let root = grantedRoot {
-            statusText = isStale ? "授权已失效，请重新选择文件夹" : "已连接：\(rootDisplayName)"
-        } else {
+        guard grantedRoot != nil else {
+            dataFileCount = 0
             statusText = "未连接"
+            return
+        }
+        if let dir = dataFolderURL {
+            dataFileCount = Self.dataFileNames.filter {
+                fm.fileExists(atPath: dir.appendingPathComponent($0).path)
+            }.count
+        } else {
+            dataFileCount = 0
+        }
+        if isStale {
+            statusText = "授权已失效，请重新选择文件夹"
+        } else if dataFileCount > 0 {
+            statusText = "已连接：\(rootDisplayName) · 找到 \(dataFileCount) 个数据文件"
+        } else {
+            statusText = "已连接：\(rootDisplayName) · 暂无数据文件（首次使用或目录不对）"
         }
     }
 
@@ -180,14 +242,7 @@ final class ICloudFolderGrant: ObservableObject {
     // 对比数据目录 5 个 JSON 的 (修改时间, 大小) 快照，与基线不同则说明
     // Mac 端写入已经过 iCloud 同步下来，触发全部 Manager 重载。
     // 本地写入会通过 noteLocalWrite 钩子刷新基线，不会被误判。
-
-    private static let dataFileNames = [
-        "habitica_pomodoro_settings.json",
-        "habitica_pomodoro_block_progress.json",
-        "habitica_pomodoro_block_history.json",
-        "habitica_pomodoro_daily_blocks.json",
-        "habitica_pomodoro_top_three.json",
-    ]
+    // （数据文件清单见上方 dataFileNames）
 
     private var baselineSnapshot: [String: (mtime: Date, size: Int64)] = [:]
 
