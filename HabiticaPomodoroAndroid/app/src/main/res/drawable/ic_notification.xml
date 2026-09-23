@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：番茄轮廓（纯色矢量，符合通知图标规范） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,21c-4.42,0 -8,-3.58 -8,-8c0,-3.86 2.73,-7.08 6.38,-7.83C10.9,4.44 11.4,4 12,4s1.1,0.44 1.62,1.17C17.27,5.92 20,9.14 20,13C20,17.42 16.42,21 12,21zM12,6.2C11.5,6.7 11,7 10.5,7C8.01,7.66 6,9.6 6,13c0,3.31 2.69,6 6,6s6,-2.69 6,-6c0,-3.4 -2.01,-5.34 -4.5,-6C13,7 12.5,6.7 12,6.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2c0.55,0 1,0.45 1,1v1h-2V3C11,2.45 11.45,2 12,2z" />
+</vector>

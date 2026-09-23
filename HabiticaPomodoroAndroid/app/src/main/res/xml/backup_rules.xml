@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 备份规则：设置与任务 JSON 可随 Android 云备份迁移到新手机 -->
+<full-backup-content>
+    <include domain="file" path="." />
+</full-backup-content>
