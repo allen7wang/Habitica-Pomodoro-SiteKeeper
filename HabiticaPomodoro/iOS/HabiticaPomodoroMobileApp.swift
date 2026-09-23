@@ -18,6 +18,10 @@ struct HabiticaPomodoroMobileApp: App {
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // 必须最先执行：解析 iCloud Drive 文件夹授权 bookmark，
+        // 保证之后任何 Manager 首次初始化时 PomodoroDataDir.url 已指向 iCloud 目录
+        _ = ICloudFolderGrant.shared
+
         // 通知 delegate（前台也展示横幅）；权限在首次启动番茄时再请求（懒加载，避免启动即弹窗）
         UNUserNotificationCenter.current().delegate = self
 

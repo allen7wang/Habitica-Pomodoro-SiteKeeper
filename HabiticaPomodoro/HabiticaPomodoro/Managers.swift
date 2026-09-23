@@ -9,6 +9,14 @@ enum PomodoroDataDir {
     static let folderName = ".habitica-pomodoro"
 
     static var url: URL {
+        #if os(iOS)
+        // iOS：用户通过文件选择器授权 iCloud Drive 目录后，数据落在
+        // <授权目录>/.habitica-pomodoro（与 macOS 端 ~/Documents/.habitica-pomodoro 同一批文件）。
+        // 未授权时回退 App 沙箱本地目录，保证 App 始终可用。
+        if let iCloudDir = ICloudFolderGrant.shared.dataFolderURL {
+            return iCloudDir
+        }
+        #endif
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent(folderName)
         if !FileManager.default.fileExists(atPath: dir.path) {
@@ -111,6 +119,17 @@ class SettingsManager: ObservableObject {
             // Also save to UserDefaults as backup
             UserDefaults.standard.set(data, forKey: localBackupKey)
         }
+    }
+
+    /// 数据目录变化后（如 iOS 授权 iCloud 文件夹）重新加载
+    func reload() {
+        if let loaded = Self.loadFile(UserSettings.self, from: fileURL) {
+            settings = loaded
+        } else if let data = UserDefaults.standard.data(forKey: localBackupKey),
+                  let decoded = try? JSONDecoder().decode(UserSettings.self, from: data) {
+            settings = decoded
+        }
+        print("Settings reloaded from: \(fileURL.path)")
     }
 }
 
@@ -227,6 +246,39 @@ class BlockProgressManager: ObservableObject {
         if let data = try? JSONEncoder().encode(dailyBlocksHistory) {
             UserDefaults.standard.set(data, forKey: localBackupDailyBlocksKey)
         }
+    }
+
+    /// 数据目录变化后（如 iOS 授权 iCloud 文件夹）重新加载全部三类数据
+    func reload() {
+        if let loaded = Self.loadFile(BlockProgress.self, from: progressFileURL) {
+            blockProgress = loaded
+        } else if let data = UserDefaults.standard.data(forKey: localBackupProgressKey),
+                  let decoded = try? JSONDecoder().decode(BlockProgress.self, from: data) {
+            blockProgress = decoded
+        } else {
+            blockProgress = BlockProgress()
+        }
+
+        if let loaded = Self.loadFile([String: [BlockHistoryEntry]].self, from: historyFileURL) {
+            blockHistory = loaded
+        } else if let data = UserDefaults.standard.data(forKey: localBackupHistoryKey),
+                  let decoded = try? JSONDecoder().decode([String: [BlockHistoryEntry]].self, from: data) {
+            blockHistory = decoded
+        } else {
+            blockHistory = [:]
+        }
+
+        if let loaded = Self.loadFile(DailyBlocksHistory.self, from: dailyBlocksFileURL) {
+            dailyBlocksHistory = loaded
+        } else if let data = UserDefaults.standard.data(forKey: localBackupDailyBlocksKey),
+                  let decoded = try? JSONDecoder().decode(DailyBlocksHistory.self, from: data) {
+            dailyBlocksHistory = decoded
+        } else {
+            dailyBlocksHistory = [:]
+        }
+
+        resetIfNeeded()
+        print("BlockProgress reloaded from: \(progressFileURL.path)")
     }
 
     private func todayKey() -> String {
@@ -420,6 +472,34 @@ class TopThreeManager: ObservableObject {
         } catch {
             print("Error saving TopThree: \(error)")
         }
+    }
+
+    /// 数据目录变化后（如 iOS 授权 iCloud 文件夹）重新加载
+    func reload() {
+        if let loaded = Self.loadFile(TopThreeStore.self, from: fileURL) {
+            store = loaded
+        } else if let data = UserDefaults.standard.data(forKey: localBackupKey),
+                  let decoded = try? JSONDecoder().decode(TopThreeStore.self, from: data) {
+            store = decoded
+        } else {
+            store = TopThreeStore()
+        }
+        // 与 init 相同的旧数据升级
+        if store.categoryNames.count < 3 {
+            store.categoryNames.append("Chores")
+            save()
+        }
+        var migrated = false
+        for (key, var day) in store.history {
+            for g in 0..<day.taskGroups.count {
+                let before = day.taskGroups[g].count
+                day.taskGroups[g].removeAll { $0.title.trimmingCharacters(in: .whitespaces).isEmpty }
+                if day.taskGroups[g].count != before { migrated = true }
+            }
+            if migrated { store.history[key] = day }
+        }
+        if migrated { save() }
+        print("TopThree reloaded from: \(fileURL.path)")
     }
 
     // MARK: 逻辑日：一天的开始 = 第一个 time block 的启动时间
