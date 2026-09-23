@@ -60,12 +60,6 @@ struct MobileSettingsView: View {
 
                 // 数据
                 ICloudSyncSection()
-
-                Section {
-                    Button("保存并退出") {
-                        sm.save()
-                    }
-                }
             }
             .navigationTitle("Settings")
         }
