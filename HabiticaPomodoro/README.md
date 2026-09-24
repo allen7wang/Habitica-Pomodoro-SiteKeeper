@@ -1,6 +1,6 @@
-# Habitica Pomodoro (macOS + iOS)
+# Habitica Pomodoro (macOS + iOS + Android)
 
-一款原生番茄钟应用（macOS 菜单栏 + iOS 客户端，共享同一套核心代码），深度集成 [Habitica](https://habitica.com)，并独创 **智能时间块（Block Mode）** 与 **每日三件事（Top 3）** 功能，帮你把一天组织成可执行、可回顾的节奏。
+一款原生番茄钟应用（macOS 菜单栏 + iOS / Android 客户端，共享同一套业务规则），深度集成 [Habitica](https://habitica.com)，并独创 **智能时间块（Block Mode）** 与 **每日三件事（Top 3）** 功能，帮你把一天组织成可执行、可回顾的节奏。
 
 基于 [ofekmiz/Habitica-Pomodoro-SiteKeeper](https://github.com/ofekmiz/Habitica-Pomodoro-SiteKeeper) Chrome 扩展的 macOS 原生重制与增强版。
 
@@ -57,6 +57,7 @@
 |------|------|
 | macOS | 13.0+，Universal 二进制（Apple Silicon + Intel） |
 | iOS | 16.0+，iPhone（iPad 未适配布局） |
+| Android | 8.0+（API 26），Kotlin + Jetpack Compose 原生 |
 
 ## 安装 — macOS
 
@@ -114,6 +115,29 @@ bash build_ios.sh --no-install # 仅编译
 - 连接成功后会显示「✅ 已找到 5 个数据文件，与 Mac 版共用同一份数据」
 - Mac 端需已开启 iCloud「桌面与文稿」同步（系统设置 → Apple ID → iCloud → iCloud 云盘）
 - 不连接也能用：数据存本机沙箱，任务仍通过 Habitica 云端跨端同步
+
+## 安装 — Android
+
+1. 从 [Releases](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases) 下载 `HabiticaPomodoro-Android-v1.0.0.apk`（tag `v1.0.0-android`）
+2. 传到手机，点击安装（需允许「安装未知来源应用」）
+3. 打开 App → 设置 → 填写 Habitica User ID 与 API Token
+
+- APK 为 debug 签名构建（开源侧载分发，功能与正式签名无差异），无 7 天过期问题
+- 任务数据经 Habitica 云端与 Mac / iPhone 互通；本机设置与番茄历史存应用私有目录，随 Android 云备份迁移
+- Android 无法访问 iCloud Drive，因此 Mac↔iPhone 的 iCloud 文件同步不适用于 Android（平台限制）
+- Android 端功能为 MVP：番茄计时 + Task 三件事 + Role 角色页（无时间块/统计图）
+
+源码构建：
+
+```bash
+git clone https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper.git
+cd Habitica-Pomodoro-SiteKeeper/HabiticaPomodoroAndroid
+# 需要 JDK 21 + Android SDK（platform-tools / platforms;android-35 / build-tools;35.0.0）
+bash build_android.sh            # debug APK
+bash build_android.sh release    # release APK（无 keystore.properties 时用 debug 签名）
+```
+
+详见 [HabiticaPomodoroAndroid/README.md](../HabiticaPomodoroAndroid/README.md)。
 
 ## 使用说明
 
