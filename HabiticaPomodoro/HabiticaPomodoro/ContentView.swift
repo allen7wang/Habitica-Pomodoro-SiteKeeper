@@ -799,10 +799,10 @@ struct BlockTimeBlockView: View {
 private struct BlockTimeBlockViewContent: View {
     @EnvironmentObject var engine: PomodoroEngine
     @ObservedObject var blockManager = BlockProgressManager.shared
+    @ObservedObject var plantJournal = PlantJournal.shared
 
     var body: some View {
         let progress = blockManager.getTodayBlockProgress(settings: engine.settings)
-        let currentBlockIdx = blockManager.blockProgress.currentBlockIndex
         let totalPomoPerBlock = engine.settings.blockPomoCount
 
         VStack(spacing: 6) {
@@ -835,21 +835,60 @@ private struct BlockTimeBlockViewContent: View {
                     
                     Spacer()
 
-                    // Progress circles for this block
-                    HStack(spacing: 3) {
+                    // 同一排种植槽：空圆点 / 灌木 / 枯萎；末尾独立的 combo 树。
+                    HStack(spacing: 2) {
+                        let completed = blockIndex < progress.count ? progress[blockIndex] : 0
+                        let attempts = plantJournal.plants(blockIndex: blockIndex, completed: completed)
+                        let visible = Array(attempts.suffix(totalPomoPerBlock))
                         ForEach(0..<totalPomoPerBlock, id: \.self) { pomoIndex in
-                            let completedInBlock = blockIndex < progress.count ? progress[blockIndex] : 0
-                            let isCompleted = pomoIndex < completedInBlock
-                            Circle()
-                                .fill(isCompleted ? Color.green : Color.gray.opacity(0.3))
-                                .frame(width: 6, height: 6)
+                            PlantMarkerView(outcome: pomoIndex < visible.count ? visible[pomoIndex] : nil)
                         }
+                        .help("完成 \(attempts.filter { $0 == .shrub }.count) · 放弃 \(attempts.filter { $0 == .wilted }.count)")
+
+                        Rectangle().fill(Color.secondary.opacity(0.3))
+                            .frame(width: 1, height: 10)
+                            .padding(.horizontal, 2)
+                        let trees = plantJournal.treeCount(blockIndex: blockIndex)
+                        PlantMarkerView(treeCount: trees)
                     }
                 }
                 .padding(.horizontal, 8)
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+// 与原小圆点共用一行；固定尺寸，不撑大时间块布局。
+private struct PlantMarkerView: View {
+    var outcome: PlantOutcome? = nil
+    var treeCount: Int = 0
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if treeCount > 0 {
+                Text("🌳")
+                    .font(.system(size: 11))
+                    .help("完成 \(treeCount) 个 combo")
+                if treeCount > 1 {
+                    Text("×\(treeCount)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            } else if let outcome = outcome {
+                Text(outcome == .shrub ? "🌿" : "🥀")
+                    .font(.system(size: 11))
+                    .help(outcome == .shrub ? "完成 Pomo：灌木" : "中途放弃：枯萎")
+            } else {
+                Circle()
+                    .strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1)
+                    .frame(width: 7, height: 7)
+                    .help("尚未种植")
+            }
+        }
+        .frame(minWidth: 12, minHeight: 14)
+        .accessibilityLabel(treeCount > 0 ? "种树 \(treeCount) 棵" :
+            outcome == .shrub ? "灌木" : outcome == .wilted ? "枯萎" : "空种植位")
     }
 }
 

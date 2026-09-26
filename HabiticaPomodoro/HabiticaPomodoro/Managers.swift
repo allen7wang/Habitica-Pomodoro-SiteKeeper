@@ -335,36 +335,42 @@ class BlockProgressManager: ObservableObject {
         }
     }
 
-    // 记录 pomo 完成到当前块
-    func recordPomoInCurrentBlock(settings: UserSettings) {
-        // 先更新当前块索引（基于时间）
+    // 记录 pomo 完成到当前块；植物单独持久化，避免旧版 iOS 覆盖新字段。
+    func recordPomoInCurrentBlock(settings: UserSettings, comboCompleted: Bool = false) {
         updateBlockIndexFromTime(settings: settings)
-
-        // 增加当前块的 pomo 计数
-        blockProgress.incrementBlockPomo()
-
-        // 记录到每日进度
         let today = todayKey()
-        if var daily = dailyBlocksHistory[today] {
-            // 确保数组长度足够
-            while daily.blockProgress.count <= blockProgress.currentBlockIndex {
-                daily.blockProgress.append(0)
-            }
-            daily.blockProgress[blockProgress.currentBlockIndex] = blockProgress.blockPomoCounter
-            dailyBlocksHistory[today] = daily
-        } else {
-            var progress = Array(repeating: 0, count: settings.blockCount)
-            if blockProgress.currentBlockIndex < progress.count {
-                progress[blockProgress.currentBlockIndex] = 1
-            }
-            dailyBlocksHistory[today] = DailyBlockProgress(
-                date: today,
-                blockProgress: progress,
-                blockGoals: settings.blockGoals
-            )
-        }
+        let index = blockProgress.currentBlockIndex
+        var daily = dailyBlocksHistory[today] ?? DailyBlockProgress(
+            date: today,
+            blockProgress: Array(repeating: 0, count: settings.blockCount),
+            blockGoals: settings.blockGoals
+        )
+        while daily.blockProgress.count <= index { daily.blockProgress.append(0) }
+        // 重新启动或切换块后，以当天已保存的进度继续累加。
+        blockProgress.blockPomoCounter = max(blockProgress.blockPomoCounter, daily.blockProgress[index])
+        blockProgress.incrementBlockPomo()
+        saveProgress()
+        daily.blockProgress[index] = blockProgress.blockPomoCounter
+        dailyBlocksHistory[today] = daily
         saveDailyBlocks()
+        #if os(macOS)
+        PlantJournal.shared.recordCompletion(
+            blockIndex: index, completed: blockProgress.blockPomoCounter,
+            comboCompleted: comboCompleted
+        )
+        #endif
     }
+
+    #if os(macOS)
+    // 放弃进行中的 pomo：只记枯萎，不增加完成数。
+    func recordAbandonedPomo(settings: UserSettings) {
+        updateBlockIndexFromTime(settings: settings)
+        let index = blockProgress.currentBlockIndex
+        let progress = dailyBlocksHistory[todayKey()]?.blockProgress ?? []
+        let completed = progress.indices.contains(index) ? progress[index] : 0
+        PlantJournal.shared.recordAbandonment(blockIndex: index, completed: completed)
+    }
+    #endif
 
     // 记录块完成
     func recordBlockComplete(settings: UserSettings) {
@@ -416,6 +422,9 @@ class BlockProgressManager: ObservableObject {
         dailyBlocksHistory = [:]
         saveHistory()
         saveDailyBlocks()
+        #if os(macOS)
+        PlantJournal.shared.clear()
+        #endif
     }
 
     // 获取今天的块历史

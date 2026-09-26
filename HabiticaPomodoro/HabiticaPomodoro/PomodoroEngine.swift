@@ -110,7 +110,9 @@ class PomodoroEngine: ObservableObject {
         // MARK: - Block Mode Logic
         if settings.enableBlockMode {
             // 根据当前时间确定属于哪个块
-            BlockProgressManager.shared.recordPomoInCurrentBlock(settings: settings)
+            BlockProgressManager.shared.recordPomoInCurrentBlock(
+                settings: settings, comboCompleted: setComplete
+            )
 
             let (completed, total) = BlockProgressManager.shared.getCurrentBlockCompletion(settings: settings)
             let bp = BlockProgressManager.shared.blockProgress
@@ -260,6 +262,11 @@ class PomodoroEngine: ObservableObject {
 
     // MARK: - Pomodoro Interrupted
     func pomodoroInterrupted(breakStreak: Bool) {
+        #if os(macOS)
+        if phase == .pomodoro && settings.enableBlockMode {
+            BlockProgressManager.shared.recordAbandonedPomo(settings: settings)
+        }
+        #endif
         audioManager.stopAmbient()
         let failedBreakExtension = settings.breakExtentionFails && phase == .breakExtension
         let breakExtensionZero = !settings.breakExtentionFails && settings.breakExtention == 0
@@ -322,9 +329,20 @@ class PomodoroEngine: ObservableObject {
 
     // MARK: - Skip to Break
     func skipToBreak() {
+        guard phase == .pomodoro else { return }
+        #if os(macOS)
+        if settings.enableBlockMode {
+            BlockProgressManager.shared.recordAbandonedPomo(settings: settings)
+        }
+        #endif
         audioManager.stopAmbient()
         stopTimer()
+        #if os(macOS)
+        // 跳过不是完成：枯萎植物不计入 combo。
+        pomoSetCounter = 0
+        #else
         pomoSetCounter += 1
+        #endif
         startBreak()
         sendNotification(title: "Time's Up", body: "Take a break")
         isFrozen = false
