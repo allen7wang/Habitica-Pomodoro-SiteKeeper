@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 备份规则：设置与任务 JSON 可随 Android 云备份迁移到新手机 -->
+<!-- Keep nonsecret history while excluding the plaintext Habitica API token in settings. -->
 <full-backup-content>
     <include domain="file" path="." />
+    <exclude domain="file" path=".habitica-pomodoro/habitica_pomodoro_settings.json" />
+        <exclude domain="file" path=".habitica-pomodoro/habitica_pomodoro_settings.json.pending" />
+        <exclude domain="file" path=".habitica-pomodoro/habitica_pomodoro_timer.json" />
+        <exclude domain="file" path=".habitica-pomodoro/habitica_pomodoro_timer.json.pending" />
 </full-backup-content>

@@ -12,6 +12,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import com.habitica.pomodoro.service.PomoAudio
+import com.habitica.pomodoro.data.HabiticaAPI
+import com.habitica.pomodoro.data.isValidHabiticaUid
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -36,7 +42,7 @@ import com.habitica.pomodoro.engine.PomodoroViewModel
 import com.habitica.pomodoro.engine.PomodoroViewModel.UiState
 
 /**
- * 设置页。所有改动即时保存（与 iOS 端 didSet 自动保存行为一致，无需"保存"按钮）。
+ * 设置页。一般选项即时保存；User ID 和自定义 API 地址校验后明确应用。
  *
  * 注意：Android 无法访问 iCloud Drive（Apple 不向非苹果平台开放），
  * 因此本机设置/历史存在应用私有目录，任务与习惯经 Habitica 云端跨端一致。
@@ -49,6 +55,18 @@ fun SettingsScreen(
 ) {
     val s = state.settings
     var showToken by remember { mutableStateOf(false) }
+    var uidDraft by remember(s.uid) { mutableStateOf(s.uid) }
+    var uidError by remember(s.uid) { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val preview = remember { PomoAudio(context.applicationContext) }
+    DisposableEffect(preview) { onDispose { preview.stopAll(); vm.refreshRuntimeAudio() } }
+    var serverDraft by remember(s.developerServerUrl) { mutableStateOf(s.developerServerUrl) }
+    var confirmServer by remember { mutableStateOf(false) }
+    var serverError by remember { mutableStateOf<String?>(null) }
+    if (confirmServer) AlertDialog(onDismissRequest = { confirmServer = false }, title = { Text("确认自定义 API 服务") },
+        text = { Text("User ID 和 API Token 会发送给此 HTTPS 服务器。仅使用你控制或信任的服务；HTTPS 不代表服务可信。不跟随重定向，也不接受 HTTP 地址。") },
+        confirmButton = { TextButton(onClick = { vm.updateSettings { it.copy(developerServerUrl = serverDraft.trim()) }; confirmServer = false }) { Text("确认使用") } },
+        dismissButton = { TextButton(onClick = { confirmServer = false }) { Text("取消") } })
 
     Column(
         modifier = modifier
@@ -64,19 +82,31 @@ fun SettingsScreen(
             SwitchRow(
                 label = "连接 Habitica",
                 checked = s.connectHabitica,
-                onCheckedChange = { v -> vm.updateSettings { it.connectHabitica = v } },
+                onCheckedChange = { v -> vm.updateSettings { it.copy(connectHabitica = v) } },
             )
             if (s.connectHabitica) {
                 OutlinedTextField(
-                    value = s.uid,
-                    onValueChange = { v -> vm.updateSettings { it.uid = v } },
+                    value = uidDraft,
+                    onValueChange = { v ->
+                        uidDraft = v
+                        uidError = if (isValidHabiticaUid(v)) null else "User ID 必须是完整 UUID，不能包含空白"
+                    },
                     label = { Text("User ID") },
                     singleLine = true,
+                    isError = uidError != null,
+                    supportingText = { uidError?.let { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                TextButton(onClick = {
+                    if (!isValidHabiticaUid(uidDraft)) uidError = "User ID 必须是完整 UUID，不能包含空白；原账号未改变"
+                    else {
+                        vm.updateSettings { it.copy(uid = uidDraft) }
+                        uidError = null
+                    }
+                }) { Text("应用 User ID") }
                 OutlinedTextField(
                     value = s.apiToken,
-                    onValueChange = { v -> vm.updateSettings { it.apiToken = v } },
+                    onValueChange = { v -> vm.updateSettings { it.copy(apiToken = v) } },
                     label = { Text("API Token") },
                     singleLine = true,
                     visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
@@ -97,10 +127,19 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                OutlinedTextField(serverDraft, onValueChange = { serverDraft = it; serverError = null },
+                    label = { Text("自定义 HTTPS API 根地址（留空使用官方）") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    supportingText = { Text("例如 https://your-server.example/api/v3/；凭据将发送给该服务") })
+                TextButton(onClick = {
+                    if (!HabiticaAPI.validServerUrl(serverDraft)) serverError = "仅支持不含账号、查询参数和片段的 HTTPS 地址"
+                    else if (serverDraft.isBlank()) vm.updateSettings { it.copy(developerServerUrl = "") }
+                    else confirmServer = true
+                }) { Text("应用 API 地址") }
+                serverError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
-                    onClick = { vm.refreshProfile() },
+                    onClick = { vm.refreshProfile(); vm.ensureDefaultHabits() },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = s.uid.isNotBlank() && s.apiToken.isNotBlank(),
+                    enabled = isValidHabiticaUid(s.uid) && s.apiToken.isNotBlank(),
                 ) { Text("测试连接并刷新角色") }
                 state.profileError?.let {
                     Text(
@@ -126,34 +165,36 @@ fun SettingsScreen(
                 value = s.pomoDurationMins,
                 range = 1..120,
                 suffix = "分钟",
-                onChange = { v -> vm.updateSettings { it.pomoDurationMins = v } },
+                onChange = { v -> vm.updateSettings { it.copy(pomoDurationMins = v) } },
             )
             StepperRow(
                 label = "短休息",
                 value = s.breakDuration,
                 range = 1..60,
                 suffix = "分钟",
-                onChange = { v -> vm.updateSettings { it.breakDuration = v } },
+                onChange = { v -> vm.updateSettings { it.copy(breakDuration = v) } },
             )
             StepperRow(
                 label = "长休息",
                 value = s.longBreakDuration,
                 range = 1..120,
                 suffix = "分钟",
-                onChange = { v -> vm.updateSettings { it.longBreakDuration = v } },
+                onChange = { v -> vm.updateSettings { it.copy(longBreakDuration = v) } },
             )
             StepperRow(
                 label = "长休息间隔",
                 value = s.pomoSetNum,
                 range = 1..12,
                 suffix = "个番茄",
-                onChange = { v -> vm.updateSettings { it.pomoSetNum = v } },
+                onChange = { v -> vm.updateSettings { it.copy(pomoSetNum = v) } },
             )
+            StepperRow("休息延长", s.breakExtention, 0..30, "分钟") { v -> vm.updateSettings { it.copy(breakExtention = v) } }
+            SwitchRow("延长结束后清空连击", s.resetPomoAfterBreak) { v -> vm.updateSettings { it.copy(resetPomoAfterBreak = v) } }
             HorizontalDivider()
             SwitchRow(
                 label = "手动开始休息",
                 checked = s.manualBreak,
-                onCheckedChange = { v -> vm.updateSettings { it.manualBreak = v } },
+                onCheckedChange = { v -> vm.updateSettings { it.copy(manualBreak = v) } },
             )
             Text(
                 text = if (s.manualBreak) "番茄结束后等你点击才开始休息" else "番茄结束后自动进入休息",
@@ -162,27 +203,36 @@ fun SettingsScreen(
             )
         }
 
+        SettingsCard(title = "种植与时间块") { BlockSettings(vm, state) }
+
+        SettingsCard(title = "Habitica 番茄打分") {
+            SwitchRow("完成番茄时给习惯加分", s.pomoHabitPlus) { v -> vm.updateSettings { it.copy(pomoHabitPlus = v) } }
+            SwitchRow("中途放弃时扣分", s.pomoHabitMinus) { v -> vm.updateSettings { it.copy(pomoHabitMinus = v) } }
+            SwitchRow("休息延长超时扣分", s.breakExtentionFails) { v -> vm.updateSettings { it.copy(breakExtentionFails = v) } }
+            SwitchRow("使用自定义番茄 Habit", s.customPomodoroTask) { v -> vm.updateSettings { it.copy(customPomodoroTask = v) } }
+            if (s.customPomodoroTask) OutlinedTextField(value = s.pomodoroTaskId.orEmpty(), onValueChange = { v -> vm.updateSettings { it.copy(pomodoroTaskId = v.trim().ifBlank { null }) } },
+                label = { Text("番茄 Habit 任务 ID") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            SwitchRow("完成一组时给习惯加分", s.pomoSetHabitPlus) { v -> vm.updateSettings { it.copy(pomoSetHabitPlus = v) } }
+            SwitchRow("使用自定义 Combo Habit", s.customSetTask) { v -> vm.updateSettings { it.copy(customSetTask = v) } }
+            if (s.customSetTask) OutlinedTextField(value = s.pomodoroSetTaskId.orEmpty(), onValueChange = { v -> vm.updateSettings { it.copy(pomodoroSetTaskId = v.trim().ifBlank { null }) } },
+                label = { Text("一组 Habit 任务 ID") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            SwitchRow("块达标时奖励一次", s.blockRewardEnabled) { v -> vm.updateSettings { it.copy(blockRewardEnabled = v) } }
+            Text("默认自动查找/创建 Pomodoro 与 Pomodoro Combo!；自定义模式使用填写的 Habit ID。块奖励为独立的一次额外加分。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = vm::ensureDefaultHabits, enabled = !state.habiticaBusy) { Text("确认/初始化番茄习惯") }
+            SwitchRow("短休息结束发 Habitica 私信", s.breakExtentionNotify) { v -> vm.updateSettings { it.copy(breakExtentionNotify = v) } }
+            SwitchRow("长休息结束发 Habitica 私信", s.longBreakNotify) { v -> vm.updateSettings { it.copy(longBreakNotify = v) } }
+        }
+
         // MARK: 提醒声音
-        SettingsCard(title = "提醒声音") {
-            Text(
-                text = "番茄结束音：${if (s.pomoEndSound == "None") "系统默认" else s.pomoEndSound}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = "音量 ${String.format(java.util.Locale.US, "%.0f%%", s.pomoEndSoundVolume * 100)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Slider(
-                value = s.pomoEndSoundVolume.toFloat(),
-                onValueChange = { v -> vm.updateSettings { it.pomoEndSoundVolume = v.toDouble() } },
-                valueRange = 0f..1f,
-            )
-            Text(
-                text = "阶段结束的提醒通过通知栏发送，锁屏也能看到。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        SettingsCard(title = "阶段提醒") {
+            SoundSetting("番茄结束音", s.pomoEndSound, s.pomoEndSoundVolume, PomoAudio.soundOptions,
+                { v -> vm.updateSettings { it.copy(pomoEndSound = v) } }, { v -> vm.updateSettings { it.copy(pomoEndSoundVolume = v) } }) { preview.effect(s.pomoEndSound, s.pomoEndSoundVolume, true) }
+            SoundSetting("休息结束音", s.breakEndSound, s.breakEndSoundVolume, PomoAudio.soundOptions,
+                { v -> vm.updateSettings { it.copy(breakEndSound = v) } }, { v -> vm.updateSettings { it.copy(breakEndSoundVolume = v) } }) { preview.effect(s.breakEndSound, s.breakEndSoundVolume, true) }
+            SoundSetting("环境音", s.ambientSound, s.ambientSoundVolume, PomoAudio.ambientOptions,
+                { v -> vm.updateSettings { it.copy(ambientSound = v) } }, { v -> vm.updateSettings { it.copy(ambientSoundVolume = v) } }) { preview.previewAmbient(s.ambientSound, s.ambientSoundVolume) }
+            TextButton(onClick = { preview.stopAll(); vm.refreshRuntimeAudio() }) { Text("停止预听") }
+            Text("预听最多 8 秒。环境音仅专注时循环，暂停/休息/放弃会停止。系统通知是否显示受通知权限和渠道设置控制。", style = MaterialTheme.typography.bodySmall)
         }
 
         // MARK: 数据
@@ -203,11 +253,8 @@ fun SettingsScreen(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Android 无法访问 iCloud Drive（Apple 不向非苹果平台开放该目录），" +
-                    "所以 Mac/iPhone 之间共用的那批本地 JSON 在 Android 上读不到。" +
-                    "Android 端的任务与完成状态通过 Habitica 云端同步：Task 页每条任务对应一个 " +
-                    "Habitica todo，分类名对应 tag，完成/取消会实时打分。" +
-                    "因此三端的任务数据一致，本机设置与番茄历史各自保存在本机。",
+                text = "Android 不访问 iCloud Drive。Habits/Dailies 从 Habitica 读取并打分；本机创建的 Task 可同步为 todo。" +
+                    "Mac/iPhone 已上传且带专用日期/分类备注的 Top3 todo 会保守合并；普通 todo 不导入。本机未上传修改保留。设置、番茄/块/植物历史不跨端同步。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -215,7 +262,7 @@ fun SettingsScreen(
 
         // MARK: 关于
         SettingsCard(title = "关于") {
-            Text("Habitica Pomodoro for Android · v1.0.0", style = MaterialTheme.typography.bodyMedium)
+            Text("Habitica Pomodoro for Android · v1.2.2", style = MaterialTheme.typography.bodyMedium)
             Text(
                 text = "与 macOS / iOS 版同一套业务规则：逻辑日以第一个时间块起点（默认 04:00）为界，" +
                     "Work/MyOwn 各限 3 条、Chores 自由列表，昨天未完成任务可顺延到今天。",
@@ -287,5 +334,24 @@ private fun StepperRow(
                 enabled = value < range.last,
             ) { Text("+") }
         }
+    }
+}
+
+@Composable
+private fun SoundSetting(label: String, value: String, volume: Double, options: List<String>, onChoice: (String) -> Unit, onVolume: (Double) -> Unit, preview: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f))
+            androidx.compose.foundation.layout.Box {
+                TextButton(onClick = { expanded = true }) { Text(if (value in options) value else "None") }
+                DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                    options.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { onChoice(option); expanded = false }) }
+                }
+            }
+            TextButton(onClick = preview, enabled = value in options && value != "None") { Text("预听") }
+        }
+        Text("音量 ${(volume * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+        Slider(volume.toFloat(), onValueChange = { onVolume(it.toDouble()) })
     }
 }

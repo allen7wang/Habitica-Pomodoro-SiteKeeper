@@ -130,6 +130,7 @@ private fun ProfileHeader(p: HabiticaProfile) {
                     )
                 }
             }
+            if (p.lastLoginAt.isNotEmpty()) Text("最近登录 ${p.lastLoginAt}", style = MaterialTheme.typography.bodySmall)
             if (p.registeredAt.isNotEmpty()) {
                 Text(
                     text = "注册于 ${p.registeredAt}",
@@ -169,7 +170,7 @@ private fun VitalBars(p: HabiticaProfile) {
             VitalBar(
                 label = "EXP",
                 // EXP 用当前等级内的进度（Swift 端同一公式）
-                value = p.exp % p.expToNextLevel.coerceAtLeast(1.0),
+                value = p.exp,
                 max = p.expToNextLevel,
                 color = MaterialTheme.colorScheme.tertiary,
             )
@@ -264,7 +265,7 @@ private fun AchievementsCard(p: HabiticaProfile) {
             Text("成就", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             AchievementRow("连续打卡 (streak)", p.streak)
             AchievementRow("完美天数", p.perfectDays)
-            AchievementRow("完成任务总数", p.questsTotal)
+            AchievementRow("完成任务 (Quests)", p.questsTotal)
         }
     }
 }

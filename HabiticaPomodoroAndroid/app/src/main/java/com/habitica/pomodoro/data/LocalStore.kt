@@ -2,6 +2,7 @@ package com.habitica.pomodoro.data
 
 import android.content.Context
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -39,18 +40,52 @@ class LocalStore(context: Context) {
 
     // MARK: - 今日番茄计数（对应 Swift 端 loadTodayCount / histogram）
 
-    fun loadPomoCount(): Map<String, Int> =
-        readJson(FILE_POMO_COUNT)?.let { obj ->
-            val map = mutableMapOf<String, Int>()
-            obj.keys().forEach { k -> map[k] = obj.optInt(k, 0) }
-            map
-        } ?: emptyMap()
-
-    fun savePomoCount(counts: Map<String, Int>) {
-        val obj = JSONObject()
-        counts.forEach { (k, v) -> obj.put(k, v) }
-        writeJson(FILE_POMO_COUNT, obj)
+    fun loadHistogram(): Map<String, DayHistogram> {
+        readJson("habitica_pomodoro_histogram.json")?.let { obj ->
+            return obj.keys().asSequence().mapNotNull { key -> obj.optJSONObject(key)?.let { key to DayHistogram.fromJson(it) } }.toMap()
+        }
+        // The previous Android count-only file used logical keys. Preserve them verbatim;
+        // there is no session timestamp/minute information with which to rewrite those old days.
+        val legacy = readJson(FILE_POMO_COUNT) ?: return emptyMap()
+        val migrated = legacy.keys().asSequence().associateWith { key -> DayHistogram(legacy.optInt(key).coerceAtLeast(0), 0, "") }
+        saveHistogram(migrated)
+        return migrated
     }
+
+    fun saveHistogram(days: Map<String, DayHistogram>) = writeJson("habitica_pomodoro_histogram.json", JSONObject().apply {
+        days.forEach { (key, day) -> put(key, day.toJson()) }
+    })
+
+    fun loadPomoCount(): Map<String, Int> = loadHistogram().mapValues { it.value.pomodoros }
+    fun loadTimer(): JSONObject? = readJson("habitica_pomodoro_timer.json")
+    fun saveTimer(timer: JSONObject) = writeJson("habitica_pomodoro_timer.json", timer)
+
+    fun loadBlockProgress(): BlockProgress = readJson("habitica_pomodoro_block_progress.json")?.let(BlockProgress::fromJson) ?: BlockProgress()
+    fun saveBlockProgress(value: BlockProgress) = writeJson("habitica_pomodoro_block_progress.json", value.toJson())
+
+    fun loadDailyBlocks(): Map<String, DailyBlockProgress> = readJson("habitica_pomodoro_daily_blocks.json")?.let { json ->
+        json.keys().asSequence().mapNotNull { key -> json.optJSONObject(key)?.let { key to DailyBlockProgress.fromJson(it) } }.toMap()
+    } ?: emptyMap()
+    fun saveDailyBlocks(days: Map<String, DailyBlockProgress>) = writeJson("habitica_pomodoro_daily_blocks.json", JSONObject().apply {
+        days.forEach { (key, value) -> put(key, value.toJson()) }
+    })
+
+    fun loadBlockHistory(): Map<String, List<BlockHistoryEntry>> = readJson("habitica_pomodoro_block_history.json")?.let { json ->
+        json.keys().asSequence().associateWith { key ->
+            val array = json.optJSONArray(key) ?: JSONArray()
+            (0 until array.length()).mapNotNull { array.optJSONObject(it)?.let(BlockHistoryEntry::fromJson) }
+        }
+    } ?: emptyMap()
+    fun saveBlockHistory(days: Map<String, List<BlockHistoryEntry>>) = writeJson("habitica_pomodoro_block_history.json", JSONObject().apply {
+        days.forEach { (key, entries) -> put(key, JSONArray().apply { entries.forEach { put(it.toJson()) } }) }
+    })
+
+    fun loadPlants(): Map<String, PlantDay> = readJson("habitica_pomodoro_plants.json")?.let { json ->
+        json.keys().asSequence().mapNotNull { key -> json.optJSONObject(key)?.let { key to PlantDay.fromJson(it) } }.toMap()
+    } ?: emptyMap()
+    fun savePlants(days: Map<String, PlantDay>) = writeJson("habitica_pomodoro_plants.json", JSONObject().apply {
+        days.forEach { (key, value) -> put(key, value.toJson()) }
+    })
 
     // MARK: - 逻辑日（与 Swift TopThreeManager.logicalDateKey 一致）
 
@@ -91,7 +126,9 @@ class LocalStore(context: Context) {
         runCatching {
             val file = File(dir, name)
             file.parentFile?.takeIf { !it.exists() }?.mkdirs()
-            file.writeText(json.toString())
+            val temporary = File(dir, "$name.pending")
+            temporary.writeText(json.toString())
+            if (!temporary.renameTo(file)) throw java.io.IOException("Atomic replacement failed")
         }.onFailure { e ->
             android.util.Log.e(TAG, "写入失败 $name: ${e.message}")
         }

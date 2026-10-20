@@ -1,6 +1,7 @@
 package com.habitica.pomodoro
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +17,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -32,15 +35,18 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.habitica.pomodoro.engine.PomodoroViewModel
+import com.habitica.pomodoro.service.PomodoroTimerService
 import com.habitica.pomodoro.ui.PomoScreen
 import com.habitica.pomodoro.ui.RoleScreen
 import com.habitica.pomodoro.ui.SettingsScreen
 import com.habitica.pomodoro.ui.TaskScreen
+import com.habitica.pomodoro.ui.HabiticaListsScreen
+import com.habitica.pomodoro.ui.HistoryScreen
 import com.habitica.pomodoro.ui.theme.HabiticaPomodoroTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val vm: PomodoroViewModel by viewModels()
+    private val vm: PomodoroViewModel get() = (application as PomoApplication).engine
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -62,12 +68,28 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        dispatchNotificationAction(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        dispatchNotificationAction(intent)
+    }
+
+    private fun dispatchNotificationAction(actionIntent: Intent?) {
+        if (actionIntent?.action !in setOf(PomodoroTimerService.ACTION_PAUSE,
+                PomodoroTimerService.ACTION_RESUME, PomodoroTimerService.ACTION_STOP)) return
+        vm.handleNotificationAction(actionIntent?.action,
+            actionIntent?.getStringExtra(PomodoroTimerService.EXTRA_SESSION))
+        // Do not replay a notification action when the activity is recreated.
+        setIntent(Intent(this, MainActivity::class.java))
     }
 
     override fun onResume() {
         super.onResume()
         // 回前台按绝对结束时刻重算剩余时间；后台已结束的阶段补触发结束逻辑
         vm.resyncAfterForeground()
+        vm.attachTimerService()
     }
 
     /** Android 13+ 需运行时授权通知；首次启动时请求一次 */
@@ -82,7 +104,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 底部导航：与 iOS 端四 Tab 对齐（Pomo / Task / Role / Settings） */
+/** Six compact destinations; Habits and Dailies share one live Habitica page. */
 @Composable
 private fun RootTabs(vm: PomodoroViewModel) {
     var selected by remember { mutableIntStateOf(0) }
@@ -107,12 +129,24 @@ private fun RootTabs(vm: PomodoroViewModel) {
                 NavigationBarItem(
                     selected = selected == 2,
                     onClick = { selected = 2 },
-                    icon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                    label = { Text("Role") },
+                    icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    label = { Text("打卡") },
                 )
                 NavigationBarItem(
                     selected = selected == 3,
                     onClick = { selected = 3 },
+                    icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                    label = { Text("历史") },
+                )
+                NavigationBarItem(
+                    selected = selected == 4,
+                    onClick = { selected = 4 },
+                    icon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                    label = { Text("角色") },
+                )
+                NavigationBarItem(
+                    selected = selected == 5,
+                    onClick = { selected = 5 },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                     label = { Text("设置") },
                 )
@@ -126,8 +160,10 @@ private fun RootTabs(vm: PomodoroViewModel) {
         when (selected) {
             0 -> PomoScreen(vm = vm, state = state, modifier = modifier)
             1 -> TaskScreen(vm = vm, state = state, modifier = modifier)
-            2 -> RoleScreen(vm = vm, state = state, modifier = modifier)
-            3 -> SettingsScreen(vm = vm, state = state, modifier = modifier)
+            2 -> HabiticaListsScreen(vm = vm, state = state, modifier = modifier)
+            3 -> HistoryScreen(vm = vm, state = state, modifier = modifier)
+            4 -> RoleScreen(vm = vm, state = state, modifier = modifier)
+            5 -> SettingsScreen(vm = vm, state = state, modifier = modifier)
         }
     }
 }

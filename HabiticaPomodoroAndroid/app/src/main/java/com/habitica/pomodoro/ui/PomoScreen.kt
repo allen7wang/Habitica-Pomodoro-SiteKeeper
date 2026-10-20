@@ -4,6 +4,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,7 +52,8 @@ fun PomoScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
@@ -71,8 +74,13 @@ fun PomoScreen(
         )
 
         ControlButtons(state = state, vm = vm)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(1, 5, 15, 30).forEach { minutes -> androidx.compose.material3.TextButton(onClick = { vm.takeBreak(minutes) }, enabled = state.phase == Phase.IDLE && !state.isRunning) { Text("休息 ${minutes}m") } }
+        }
+        if (state.phase == Phase.POMODORO) androidx.compose.material3.TextButton(onClick = vm::skipToBreak) { Text("跳到短休息（不计完成）") }
 
         StatsCard(state = state)
+        if (state.settings.enableBlockMode) BlockGarden(vm, state)
     }
 }
 
@@ -82,6 +90,7 @@ private fun phaseLabel(phase: Phase): String = when (phase) {
     Phase.POMODORO -> "专注中"
     Phase.BREAK -> "休息中"
     Phase.LONG_BREAK -> "长休息中"
+    Phase.BREAK_EXTENSION -> "休息延长：回到专注"
     Phase.MANUAL_BREAK -> "该休息了，点击开始休息"
 }
 
@@ -107,6 +116,7 @@ private fun TimerRing(
     val ringColor = when (phase) {
         Phase.POMODORO -> MaterialTheme.colorScheme.primary
         Phase.BREAK, Phase.LONG_BREAK -> MaterialTheme.colorScheme.tertiary
+        Phase.BREAK_EXTENSION -> MaterialTheme.colorScheme.error
         Phase.MANUAL_BREAK -> MaterialTheme.colorScheme.secondary
         Phase.IDLE -> MaterialTheme.colorScheme.outlineVariant
     }
@@ -192,7 +202,7 @@ private fun ControlButtons(state: UiState, vm: PomodoroViewModel) {
             )
         }
 
-        if (state.phase == Phase.BREAK || state.phase == Phase.LONG_BREAK) {
+        if (state.phase in listOf(Phase.BREAK, Phase.LONG_BREAK, Phase.BREAK_EXTENSION, Phase.MANUAL_BREAK)) {
             OutlinedButton(
                 onClick = { vm.skipBreak() },
                 modifier = Modifier.weight(0.6f),
@@ -205,7 +215,7 @@ private fun ControlButtons(state: UiState, vm: PomodoroViewModel) {
                 onClick = { vm.stop() },
                 modifier = Modifier.weight(0.5f),
                 shape = RoundedCornerShape(16.dp),
-            ) { Text("结束") }
+            ) { Text("放弃") }
         }
     }
 }
@@ -229,7 +239,7 @@ private fun StatsCard(state: UiState) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("今日番茄", style = MaterialTheme.typography.bodyMedium)
+                Text("今日番茄 · ${state.histogram[com.habitica.pomodoro.data.calendarDayKey()]?.minutes ?: 0} 分钟", style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = "${state.todayPomodoros} 个",
                     style = MaterialTheme.typography.bodyMedium,

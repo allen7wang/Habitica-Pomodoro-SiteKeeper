@@ -6,6 +6,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Keep generated resources off iCloud when requested by the CLI helper.
+providers.gradleProperty("pomoBuildRoot").orNull?.let { layout.buildDirectory.set(file("$it/app")) }
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -20,15 +23,15 @@ android {
         applicationId = "com.habitica.pomodoro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.2.3"
     }
 
     signingConfigs {
         create("release") {
             // 无 keystore 时回退 debug 签名，保证 assembleRelease 始终能产出可安装的 APK
             val ks = rootProject.file("keystore.properties")
-            if (ks.exists()) {
+            if (ks.exists() && gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
                 val p = Properties()
                 ks.inputStream().use { p.load(it) }
                 storeFile = file(p.getProperty("storeFile"))

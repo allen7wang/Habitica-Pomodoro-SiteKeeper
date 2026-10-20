@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.habitica.pomodoro.data.isValidHabiticaUid
 import com.habitica.pomodoro.engine.PomodoroViewModel
 import com.habitica.pomodoro.engine.PomodoroViewModel.UiState
 
@@ -67,7 +68,21 @@ fun TaskScreen(
             .padding(horizontal = 16.dp),
     ) {
         Spacer(Modifier.height(8.dp))
-        Text("Task", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Task", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f))
+            TextButton(onClick = vm::refreshTopThreeFromCloud, enabled = !state.topThreeSyncing &&
+                state.settings.connectHabitica && isValidHabiticaUid(state.settings.uid) && state.settings.apiToken.isNotBlank()) {
+                Text(if (state.topThreeSyncing) "同步中…" else "同步 Habitica")
+            }
+        }
+        if (store.history.values.any { day -> day.taskGroups.flatten().any { it.syncPending } } || store.deletedCloudIds.isNotEmpty() || store.deletedCreateMarkers.isNotEmpty()) {
+            TextButton(onClick = vm::retryPendingTasks) { Text("重试待同步操作") }
+        }
+        state.topThreeSyncError?.let { error ->
+            Text("云端同步失败（本地任务保留）：$error", color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+        }
         Text(
             text = "今天可编辑 · 昨天只读（未完成的可以移动到今天）",
             style = MaterialTheme.typography.bodySmall,
@@ -106,11 +121,13 @@ fun TaskScreen(
                 }
 
                 val todayDay = store.history[todayKey]
-                val todayTasks = todayDay?.taskGroups?.getOrNull(index).orEmpty()
+                val todayTasks = todayDay?.taskGroups?.getOrNull(index).orEmpty().withIndex().filterNot { it.value.movedToToday }
                 itemsIndexed(
                     items = todayTasks,
-                    key = { _, task -> "today-$index-${task.id}" },
-                ) { taskIndex, task ->
+                    key = { _, entry -> "today-$index-${entry.value.id}" },
+                ) { _, entry ->
+                    val taskIndex = entry.index // Keep the original index after filtering archived rows.
+                    val task = entry.value
                     TaskRow(
                         title = task.title,
                         completed = task.isCompleted,
@@ -119,6 +136,8 @@ fun TaskScreen(
                         onToggle = { vm.toggleTask(index, taskIndex) },
                         onDelete = { vm.deleteTask(index, taskIndex) },
                         onMove = { },
+                        onEdit = { vm.editTask(index, taskIndex, it) },
+                        syncError = task.syncError ?: if (task.syncPending) "本机修改待同步" else null,
                     )
                 }
 
@@ -168,7 +187,7 @@ fun TaskScreen(
 }
 
 private fun dayGroupSize(store: com.habitica.pomodoro.data.TopThreeStore, key: String, index: Int): Int =
-    store.history[key]?.taskGroups?.getOrNull(index)?.size ?: 0
+    store.history[key]?.taskGroups?.getOrNull(index)?.count { !it.movedToToday } ?: 0
 
 @Composable
 private fun CategoryHeader(
@@ -236,8 +255,12 @@ private fun TaskRow(
     onToggle: () -> Unit,
     onDelete: () -> Unit,
     onMove: () -> Unit,
+    onEdit: (String) -> Unit = {},
+    syncError: String? = null,
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(title) { mutableStateOf(title) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -276,6 +299,7 @@ private fun TaskRow(
                 TextButton(onClick = onMove) { Text("➡️ 今天") }
             }
             if (editable) {
+                IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, contentDescription = "编辑任务") }
                 IconButton(onClick = { showDeleteConfirm = true }) {
                     Icon(
                         Icons.Filled.Delete,
@@ -290,6 +314,11 @@ private fun TaskRow(
         }
     }
 
+    syncError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+    if (editing) androidx.compose.material3.AlertDialog(onDismissRequest = { editing = false }, title = { Text("编辑任务标题") },
+        text = { OutlinedTextField(draft, onValueChange = { draft = it }, label = { Text("任务标题") }, singleLine = true) },
+        confirmButton = { TextButton(onClick = { onEdit(draft); editing = false }, enabled = draft.isNotBlank()) { Text("保存") } },
+        dismissButton = { TextButton(onClick = { editing = false }) { Text("取消") } })
     if (showDeleteConfirm) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },

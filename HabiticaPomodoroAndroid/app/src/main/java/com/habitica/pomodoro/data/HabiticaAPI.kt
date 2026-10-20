@@ -2,6 +2,7 @@ package com.habitica.pomodoro.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,6 +28,8 @@ object HabiticaAPI {
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
@@ -34,7 +37,7 @@ object HabiticaAPI {
     /** API 调用结果：成功返回 data 里的 JSON，失败返回错误描述 */
     sealed class Result<out T> {
         data class Success<T>(val value: T) : Result<T>()
-        data class Error(val message: String) : Result<Nothing>()
+        data class Error(val message: String, val statusCode: Int? = null) : Result<Nothing>()
     }
 
     private fun Request.Builder.withAuth(settings: UserSettings): Request.Builder = apply {
@@ -44,7 +47,7 @@ object HabiticaAPI {
     }
 
     private fun canCall(settings: UserSettings): Boolean =
-        settings.connectHabitica && settings.uid.isNotBlank() && settings.apiToken.isNotBlank()
+        settings.connectHabitica && isValidHabiticaUid(settings.uid) && settings.apiToken.isNotBlank()
 
     // MARK: - 通用请求
 
@@ -56,7 +59,7 @@ object HabiticaAPI {
     ): Result<JSONObject?> = withContext(Dispatchers.IO) {
         if (!canCall(settings)) return@withContext Result.Error("未连接 Habitica：请先在设置中填写 User ID 与 API Token")
         try {
-            val builder = Request.Builder().url(SERVER_URL + path).withAuth(settings)
+            val builder = Request.Builder().url(baseUrl(settings) + path).withAuth(settings)
             when (method) {
                 "GET" -> builder.get()
                 "DELETE" -> builder.delete()
@@ -68,14 +71,15 @@ object HabiticaAPI {
             client.newCall(builder.build()).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    val msg = runCatching { JSONObject(text).optString("error", text) }.getOrDefault(text)
-                    return@use Result.Error("HTTP ${resp.code}: $msg")
+                    return@use Result.Error("Habitica 请求失败 (HTTP ${resp.code})", resp.code)
                 }
-                val json = runCatching { JSONObject(text) }.getOrNull()
-                Result.Success(json?.optJSONObject("data"))
+                if (method == "DELETE" && text.isBlank()) return@use Result.Success(null)
+                val json = runCatching { JSONObject(text) }.getOrNull() ?: return@use Result.Error("API 返回格式无效")
+                if (json.optBoolean("success", true) == false) return@use Result.Error("API 未确认请求成功")
+                Result.Success(json.optJSONObject("data"))
             }
         } catch (e: Exception) {
-            Result.Error("网络错误: ${e.message}")
+            Result.Error(if (e is IllegalArgumentException) "API 地址或任务 ID 无效；仅支持不含账号、查询参数的 HTTPS 地址" else "网络连接失败，请检查网络或服务器")
         }
     }
 
@@ -97,23 +101,22 @@ object HabiticaAPI {
     private fun parseProfile(d: JSONObject): HabiticaProfile {
         var username = ""
         var registeredAt = ""
+        var lastLoginAt = ""
         d.optJSONObject("auth")?.let { auth ->
             auth.optJSONObject("local")?.let { local ->
                 username = local.optString("username", "")
             }
             // 注册时间在 auth.timestamps（不是 auth.local.timestamps）
             auth.optJSONObject("timestamps")?.let { ts ->
-                val millis = ts.optLong("registered", 0L)
-                if (millis > 0) {
-                    registeredAt = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd", java.util.Locale.US,
-                    ).format(java.util.Date(millis))
-                }
+                fun date(key: String): String = runCatching {
+                    java.time.Instant.parse(ts.optString(key)).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+                }.getOrDefault("")
+                registeredAt = date("created")
+                lastLoginAt = date("loggedin")
             }
         }
 
         val stats = d.optJSONObject("stats") ?: JSONObject()
-        val prefs = d.optJSONObject("preferences") ?: JSONObject()
         val achievements = d.optJSONObject("achievements") ?: JSONObject()
 
         var questsTotal = 0
@@ -123,7 +126,7 @@ object HabiticaAPI {
 
         return HabiticaProfile(
             username = username,
-            className = prefs.optString("class", "").replaceFirstChar { it.uppercase() },
+            className = stats.optString("class", ""),
             level = stats.optInt("lvl", 0),
             exp = stats.optDouble("exp", 0.0),
             hp = stats.optDouble("hp", 0.0),
@@ -137,6 +140,7 @@ object HabiticaAPI {
             perfectDays = achievements.optInt("perfectCount", 0),
             questsTotal = questsTotal,
             registeredAt = registeredAt,
+            lastLoginAt = lastLoginAt,
         )
     }
 
@@ -149,20 +153,20 @@ object HabiticaAPI {
     ): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
         if (!canCall(settings)) return@withContext Result.Error("未连接 Habitica：请先在设置中填写 User ID 与 API Token")
         try {
-            val builder = Request.Builder().url(SERVER_URL + path).withAuth(settings).get()
+            val builder = Request.Builder().url(baseUrl(settings) + path).withAuth(settings).get()
             client.newCall(builder.build()).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    val msg = runCatching { JSONObject(text).optString("error", text) }.getOrDefault(text)
-                    return@use Result.Error("HTTP ${resp.code}: $msg")
+                    return@use Result.Error("Habitica 请求失败 (HTTP ${resp.code})", resp.code)
                 }
                 val arr = runCatching { JSONObject(text).optJSONArray("data") }.getOrNull()
+                    ?: return@use Result.Error("Habitica 返回的任务列表格式无效")
                 val list = mutableListOf<JSONObject>()
-                if (arr != null) for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { list.add(it) }
+                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { list.add(it) }
                 Result.Success(list)
             }
         } catch (e: Exception) {
-            Result.Error("网络错误: ${e.message}")
+            Result.Error(if (e is IllegalArgumentException) "API 地址或任务 ID 无效；仅支持不含账号、查询参数的 HTTPS 地址" else "网络连接失败，请检查网络或服务器")
         }
     }
 
@@ -191,10 +195,32 @@ object HabiticaAPI {
         taskId: String,
         direction: String,
     ): Result<JSONObject?> {
-        return request(settings, "tasks/$taskId/score/$direction", method = "POST")
+        if (!validTaskId(taskId)) return Result.Error("任务 ID 无效")
+        return request(settings, "tasks/${safeTaskId(taskId)}/score/$direction", method = "POST")
     }
 
     // MARK: - Todos（Task 页任务同步为 Habitica todo）
+
+    /** Fetch both active todos and the completedTodos endpoint before merging. */
+    suspend fun fetchTopThreeTodos(settings: UserSettings): Result<List<CloudTodo>> {
+        val active = requestArray(settings, "tasks/user?type=todos")
+        if (active is Result.Error) return active
+        val completed = requestArray(settings, "tasks/user?type=completedTodos")
+        if (completed is Result.Error) return completed
+        val objects = (active as Result.Success).value + (completed as Result.Success).value
+        return Result.Success(objects.mapNotNull { obj ->
+            val id = obj.optString("_id", obj.optString("id", ""))
+            if (id.isBlank() || obj.optString("type", "todo") != "todo") null else CloudTodo(
+                id = id,
+                title = obj.optString("text", ""),
+                notes = obj.optString("notes", ""),
+                completed = obj.optBoolean("completed", false),
+                tags = obj.optJSONArray("tags")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf(String::isNotBlank) }
+                } ?: emptyList(),
+            )
+        })
+    }
 
     /** 创建 todo，返回 task id */
     suspend fun createTodo(
@@ -223,12 +249,13 @@ object HabiticaAPI {
         notes: String = "",
         tagIds: List<String>? = null,
     ): Result<Boolean> {
+        if (!validTaskId(taskId)) return Result.Error("任务 ID 无效")
         val body = JSONObject().apply {
             put("text", text)
             if (notes.isNotEmpty()) put("notes", notes)
             tagIds?.let { put("tags", org.json.JSONArray(it)) }
         }
-        return when (val result = request(settings, "tasks/$taskId", method = "PUT", body = body)) {
+        return when (val result = request(settings, "tasks/${safeTaskId(taskId)}", method = "PUT", body = body)) {
             is Result.Error -> result
             is Result.Success -> Result.Success(true)
         }
@@ -236,7 +263,8 @@ object HabiticaAPI {
 
     /** 删除 todo */
     suspend fun deleteTodo(settings: UserSettings, taskId: String): Result<Boolean> {
-        return when (val result = request(settings, "tasks/$taskId", method = "DELETE")) {
+        if (!validTaskId(taskId)) return Result.Error("任务 ID 无效")
+        return when (val result = request(settings, "tasks/${safeTaskId(taskId)}", method = "DELETE")) {
             is Result.Error -> result
             is Result.Success -> Result.Success(true)
         }
@@ -265,8 +293,9 @@ object HabiticaAPI {
 
     /** 重命名 tag（分类名修改时同步） */
     suspend fun updateTag(settings: UserSettings, tagId: String, name: String): Result<Boolean> {
+        if (!validTaskId(tagId)) return Result.Error("分类 tag ID 无效")
         val body = JSONObject().apply { put("name", name) }
-        return when (val result = request(settings, "tags/$tagId", method = "PUT", body = body)) {
+        return when (val result = request(settings, "tags/${safeTaskId(tagId)}", method = "PUT", body = body)) {
             is Result.Error -> result
             is Result.Success -> Result.Success(true)
         }
@@ -287,6 +316,53 @@ object HabiticaAPI {
                 else createTag(settings, name)
             }
         }
+    }
+
+
+    fun validServerUrl(value: String): Boolean = value.isBlank() || runCatching { checkedUrl(value); true }.getOrDefault(false)
+    private fun checkedUrl(value: String): String {
+        val url = value.trim().toHttpUrlOrNull() ?: throw IllegalArgumentException()
+        require(url.scheme == "https" && url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null)
+        return url.toString().trimEnd('/') + "/"
+    }
+    fun apiRoot(settings: UserSettings): String = if (settings.developerServerUrl.isBlank()) SERVER_URL else checkedUrl(settings.developerServerUrl)
+    private fun baseUrl(settings: UserSettings): String = apiRoot(settings)
+    private fun validTaskId(value: String) = Regex("[A-Za-z0-9_-]+").matches(value)
+    private fun safeTaskId(value: String): String { require(validTaskId(value)); return value }
+
+    suspend fun ensureHabit(settings: UserSettings, combo: Boolean): Result<String> {
+        val custom = if (combo) settings.customSetTask else settings.customPomodoroTask
+        val configured = if (combo) settings.pomodoroSetTaskId else settings.pomodoroTaskId
+        if (custom) {
+            if (configured.isNullOrBlank() || !Regex("[A-Za-z0-9_-]+").matches(configured)) return Result.Error("请填写有效的自定义 Habit ID")
+            return when (val fetched = request(settings, "tasks/$configured")) {
+                is Result.Error -> fetched
+                is Result.Success -> if (fetched.value?.optString("type") == "habit") Result.Success(configured) else Result.Error("自定义任务必须是 Habit")
+            }
+        }
+        val alias = if (combo) "sitepassPomodoroSet" else "sitepassPomodoro"
+        when (val found = request(settings, "tasks/$alias")) {
+            is Result.Success -> return found.value?.optString("_id", found.value.optString("id"))?.takeIf { it.isNotBlank() }?.let { Result.Success(it) } ?: Result.Error("默认 Habit 返回格式无效")
+            is Result.Error -> if (found.statusCode != 404) return found // Never create on timeout/auth/server failure.
+        }
+        val body = JSONObject().apply {
+            put("type", "habit"); put("text", if (combo) "Pomodoro Combo!" else "Pomodoro"); put("alias", alias)
+            put("notes", "Habit utilized by Habitica SiteKeeper. Change the difficulty manually according to your needs.")
+            put("priority", if (combo) 1.5 else 1.0); put("up", true); put("down", true)
+        }
+        return when (val created = request(settings, "tasks/user", "POST", body)) {
+            is Result.Error -> created
+            is Result.Success -> created.value?.optString("_id", created.value.optString("id"))?.takeIf { it.isNotBlank() }?.let { Result.Success(it) } ?: Result.Error("默认 Habit 创建结果无效")
+        }
+    }
+
+    suspend fun sendPrivateMessage(settings: UserSettings, message: String): Result<JSONObject?> =
+        if (!validTaskId(settings.uid)) Result.Error("User ID 无效") else request(settings, "members/send-private-message", "POST", JSONObject().apply { put("message", message); put("toUserId", settings.uid) })
+
+    suspend fun fetchTodo(settings: UserSettings, id: String): Result<CloudTodo> = if (!validTaskId(id)) Result.Error("任务 ID 无效") else when (val r = request(settings, "tasks/${safeTaskId(id)}")) {
+        is Result.Error -> r
+        is Result.Success -> r.value?.let { obj -> Result.Success(CloudTodo(id, obj.optString("text"), obj.optString("notes"), obj.optBoolean("completed"),
+            obj.optJSONArray("tags")?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList())) } ?: Result.Error("任务返回格式无效")
     }
 
     // MARK: - 连通性自检

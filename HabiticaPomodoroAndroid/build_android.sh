@@ -1,29 +1,19 @@
 #!/bin/bash
-# Android 构建脚本：编译 debug/release APK
-# 用法:
-#   bash build_android.sh            # 构建 debug APK（本机安装用）
-#   bash build_android.sh release    # 构建 release APK（发布用，无 keystore.properties 时以 debug 签名）
-set -e
-
+set -euo pipefail
 BASE="$(cd "$(dirname "$0")" && pwd)"
 cd "$BASE"
-
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
+export ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 export PATH="$JAVA_HOME/bin:$PATH"
-
-VARIANT="${1:-debug}"
-case "$VARIANT" in
-    release) TASK="assembleRelease" ; OUT="app/build/outputs/apk/release/app-release.apk" ;;
-    *)       TASK="assembleDebug"   ; OUT="app/build/outputs/apk/debug/app-debug.apk" ;;
+SCRATCH="${HERMES_SCRATCH:-$HOME/.hermes/cache/scratch}"
+mkdir -p "$SCRATCH/pomo-android-tmp"
+export TMPDIR="$SCRATCH/pomo-android-tmp"
+case "${1:-debug}" in
+    debug) TASK=assembleDebug; OUT="$SCRATCH/pomo-parity-build/app/outputs/apk/debug/app-debug.apk" ;;
+    lint) TASK=lintDebug; OUT="$SCRATCH/pomo-parity-build/app/reports/lint-results-debug.html" ;;
+    release) TASK=assembleRelease; OUT="$SCRATCH/pomo-parity-build/app/outputs/apk/release/app-release.apk" ;;
+    *) printf 'Usage: %s [debug|lint|release]\n' "$0" >&2; exit 2 ;;
 esac
-
-echo "==> Gradle $TASK (JAVA_HOME=$JAVA_HOME)"
-./gradlew "$TASK" --console=plain 2>&1 | tail -5
-
-if [ -f "$OUT" ]; then
-    echo "✅ APK: $BASE/$OUT"
-    ls -la "$OUT"
-else
-    echo "❌ 未找到 APK 产物，请检查上面的构建输出"
-    exit 1
-fi
+./gradlew --project-cache-dir "$SCRATCH/pomo-parity-gradle" -PpomoBuildRoot="$SCRATCH/pomo-parity-build" "$TASK" --console=plain
+printf 'Artifact: %s\n' "$OUT"
+test -f "$OUT"
