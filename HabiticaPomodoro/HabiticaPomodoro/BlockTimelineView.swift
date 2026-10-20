@@ -225,6 +225,7 @@ struct BlockTaskEditorView: View {
     
     @State private var newTaskTitle: String = ""
     @State private var newTaskPomo: Int = 1
+    @State private var taskToDelete: UUID?
     
     var body: some View {
         let tasks = blockIndex < settingsManager.settings.blockTasks.count 
@@ -289,19 +290,20 @@ struct BlockTaskEditorView: View {
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Text(task.title)
+                                TextField("Task title", text: taskBinding(task.id, \.title, fallback: task.title))
+                                    .textFieldStyle(.roundedBorder)
                                     .font(.body)
                                     .strikethrough(task.isCompleted)
                                     .foregroundColor(task.isCompleted ? .secondary : .primary)
                                 
                                 Spacer()
                                 
-                                Text("\(task.estimatedPomo)p")
+                                Stepper("\(task.estimatedPomo)p", value: taskBinding(task.id, \.estimatedPomo, fallback: 1), in: 1...12)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .fixedSize()
                                 
                                 Button(action: {
-                                    deleteTask(task: task)
+                                    taskToDelete = task.id
                                 }) {
                                     Image(systemName: "trash")
                                         .font(.caption)
@@ -341,6 +343,17 @@ struct BlockTaskEditorView: View {
         }
         .padding()
         .frame(minWidth: 500, minHeight: 600)
+        .confirmationDialog("删除这条块任务？", isPresented: Binding(
+            get: { taskToDelete != nil }, set: { if !$0 { taskToDelete = nil } }
+        )) {
+            Button("删除", role: .destructive) {
+                if let id = taskToDelete, settingsManager.settings.blockTasks.indices.contains(blockIndex) {
+                    settingsManager.settings.blockTasks[blockIndex].removeAll { $0.id == id }
+                }
+                taskToDelete = nil
+            }
+            Button("取消", role: .cancel) { taskToDelete = nil }
+        }
     }
     
     private func addTask() {
@@ -362,7 +375,14 @@ struct BlockTaskEditorView: View {
         settingsManager.settings.blockTasks[blockIndex][index].isCompleted.toggle()
     }
     
-    private func deleteTask(task: BlockTask) {
-        settingsManager.settings.blockTasks[blockIndex].removeAll { $0.id == task.id }
+    private func taskBinding<Value>(_ id: UUID, _ key: WritableKeyPath<BlockTask, Value>, fallback: Value) -> Binding<Value> {
+        Binding(get: {
+            guard settingsManager.settings.blockTasks.indices.contains(blockIndex) else { return fallback }
+            return settingsManager.settings.blockTasks[blockIndex].first(where: { $0.id == id })?[keyPath: key] ?? fallback
+        }, set: { value in
+            guard settingsManager.settings.blockTasks.indices.contains(blockIndex),
+                  let index = settingsManager.settings.blockTasks[blockIndex].firstIndex(where: { $0.id == id }) else { return }
+            settingsManager.settings.blockTasks[blockIndex][index][keyPath: key] = value
+        })
     }
 }

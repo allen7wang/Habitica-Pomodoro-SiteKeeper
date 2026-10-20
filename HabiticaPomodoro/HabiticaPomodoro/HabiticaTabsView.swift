@@ -4,10 +4,15 @@ import SwiftUI
 struct HabiticaHabitsView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject private var api = HabiticaAPI.shared
 
     @State private var habits: [HabiticaTaskItem] = []
     @State private var loading = false
+    @State private var loadedAccount = ""
+    @State private var loadGeneration = 0
     @State private var scoredIds = Set<String>()
+    @State private var inFlightIds = Set<String>()
+    @State private var accountGeneration = 0
 
     var body: some View {
         Group {
@@ -24,7 +29,7 @@ struct HabiticaHabitsView: View {
                         ForEach(habits) { habit in
                             HabitRow(item: habit, onScore: { direction in
                                 score(item: habit, direction: direction)
-                            }, scored: scoredIds.contains(habit.id))
+                            }, scored: scoredIds.contains(habit.id), busy: inFlightIds.contains(habit.id))
                         }
                     }
                     .padding(.horizontal, 24)
@@ -33,7 +38,24 @@ struct HabiticaHabitsView: View {
                 }
             }
         }
-        .task { await load() }
+        .safeAreaInset(edge: .top) {
+            if isConfigured {
+                VStack(spacing: 4) {
+                    HStack {
+                        if loading { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Button("刷新") { Task { await load() } }.disabled(loading)
+                    }
+                    if let error = api.lastError { Text(error).font(.caption).foregroundColor(.orange) }
+                }.padding(.horizontal, 24).padding(.vertical, 6)
+            }
+        }
+        .task(id: accountSignature) { await load() }
+    }
+
+    private var accountSignature: String {
+        let settings = settingsManager.settings
+        return "\(settings.connectHabitica)|\(settings.uid)|\(settings.apiToken)|\(settings.developerServerUrl)"
     }
 
     private var isConfigured: Bool {
@@ -61,7 +83,7 @@ struct HabiticaHabitsView: View {
             Image(systemName: "tray")
                 .font(.largeTitle)
                 .foregroundColor(.secondary)
-            Text("暂无 Habits")
+            Text(api.lastError == nil ? "暂无 Habits" : "Habits 加载失败")
                 .font(.headline)
                 .foregroundColor(.secondary)
             Button("刷新") { Task { await load() } }
@@ -70,32 +92,59 @@ struct HabiticaHabitsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @MainActor
     func load() async {
-        loading = true
-        let items = await HabiticaAPI.shared.fetchTasks(type: "habits", settings: settingsManager.settings)
-        await MainActor.run {
-            habits = items.sorted { $0.value < $1.value } // 红色（弱项）在前
+        let settings = settingsManager.settings
+        let signature = accountSignature
+        if loadedAccount != signature {
+            habits = []
             scoredIds.removeAll()
+            inFlightIds.removeAll()
+            accountGeneration += 1
             loading = false
+            loadedAccount = signature
         }
+        guard !loading else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        guard isConfigured else {
+            habits = []
+            scoredIds.removeAll()
+            inFlightIds.removeAll()
+            loading = false
+            return
+        }
+        scoredIds.removeAll()
+        loading = true
+        let items = await HabiticaAPI.shared.fetchTasks(type: "habits", settings: settings)
+        guard accountSignature == signature, loadGeneration == generation else { return }
+        if api.lastError == nil { habits = items.sorted { $0.value < $1.value } } // 红色（弱项）在前
+        loading = false
     }
 
     func score(item: HabiticaTaskItem, direction: String) {
-        guard !scoredIds.contains(item.id) else { return }
+        guard isConfigured, !scoredIds.contains(item.id), !inFlightIds.contains(item.id) else { return }
+        let settings = settingsManager.settings
+        let signature = accountSignature
+        inFlightIds.insert(item.id)
+        let generation = accountGeneration
         Task {
-            let result = await HabiticaAPI.shared.scoreTask(taskId: item.id, direction: direction, settings: settingsManager.settings)
+            let result = await HabiticaAPI.shared.scoreTask(taskId: item.id, direction: direction, settings: settings)
             await MainActor.run {
+                guard accountSignature == signature, loadedAccount == signature, accountGeneration == generation else { return }
                 if result != nil {
                     scoredIds.insert(item.id)
                     // 刷新本地 value 与顶部状态栏
                     if let idx = habits.firstIndex(where: { $0.id == item.id }) {
+                        let current = habits[idx]
                         habits[idx] = HabiticaTaskItem(
-                            id: item.id, text: item.text, notes: item.notes,
-                            value: item.value + (direction == "up" ? 1 : -1),
-                            completed: item.completed, canUp: item.canUp, canDown: item.canDown, isDue: item.isDue)
+                            id: current.id, text: current.text, notes: current.notes,
+                            value: current.value + (direction == "up" ? 1 : -1),
+                            completed: current.completed, canUp: current.canUp, canDown: current.canDown, isDue: current.isDue)
                     }
                     Task { await engine.refreshHabitica() }
                 }
+                inFlightIds.remove(item.id)
             }
         }
     }
@@ -106,6 +155,7 @@ struct HabitRow: View {
     let item: HabiticaTaskItem
     let onScore: (String) -> Void
     let scored: Bool
+    let busy: Bool
 
     private var valueColor: Color {
         if item.value < -1 { return .red }
@@ -122,10 +172,10 @@ struct HabitRow: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(.white)
                     .frame(width: 30, height: 44)
-                    .background(item.canDown && !scored ? Color.secondary : Color.gray.opacity(0.3))
+                    .background(item.canDown && !scored && !busy ? Color.secondary : Color.gray.opacity(0.3))
             }
             .buttonStyle(.plain)
-            .disabled(!item.canDown || scored)
+            .disabled(!item.canDown || scored || busy)
 
             // 内容
             HStack(spacing: 8) {
@@ -157,10 +207,10 @@ struct HabitRow: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(.white)
                     .frame(width: 30, height: 44)
-                    .background(item.canUp && !scored ? Color.green : Color.gray.opacity(0.3))
+                    .background(item.canUp && !scored && !busy ? Color.green : Color.gray.opacity(0.3))
             }
             .buttonStyle(.plain)
-            .disabled(!item.canUp || scored)
+            .disabled(!item.canUp || scored || busy)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
@@ -175,9 +225,14 @@ struct HabitRow: View {
 struct HabiticaDailiesView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject private var api = HabiticaAPI.shared
 
     @State private var dailies: [HabiticaTaskItem] = []
     @State private var loading = false
+    @State private var loadedAccount = ""
+    @State private var loadGeneration = 0
+    @State private var inFlightIds = Set<String>()
+    @State private var accountGeneration = 0
 
     var body: some View {
         Group {
@@ -201,7 +256,7 @@ struct HabiticaDailiesView: View {
                     Image(systemName: "tray")
                         .font(.largeTitle)
                         .foregroundColor(.secondary)
-                    Text("暂无 Dailies")
+                    Text(api.lastError == nil ? "暂无 Dailies" : "Dailies 加载失败")
                         .font(.headline)
                         .foregroundColor(.secondary)
                     Button("刷新") { Task { await load() } }
@@ -212,7 +267,7 @@ struct HabiticaDailiesView: View {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: 6) {
                         ForEach(dailies) { daily in
-                            DailyRow(item: daily, onToggle: { toggle(item: daily) })
+                            DailyRow(item: daily, busy: inFlightIds.contains(daily.id), onToggle: { toggle(item: daily) })
                         }
                     }
                     .padding(.horizontal, 24)
@@ -221,7 +276,24 @@ struct HabiticaDailiesView: View {
                 }
             }
         }
-        .task { await load() }
+        .safeAreaInset(edge: .top) {
+            if isConfigured {
+                VStack(spacing: 4) {
+                    HStack {
+                        if loading { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Button("刷新") { Task { await load() } }.disabled(loading)
+                    }
+                    if let error = api.lastError { Text(error).font(.caption).foregroundColor(.orange) }
+                }.padding(.horizontal, 24).padding(.vertical, 6)
+            }
+        }
+        .task(id: accountSignature) { await load() }
+    }
+
+    private var accountSignature: String {
+        let settings = settingsManager.settings
+        return "\(settings.connectHabitica)|\(settings.uid)|\(settings.apiToken)|\(settings.developerServerUrl)"
     }
 
     private var isConfigured: Bool {
@@ -230,25 +302,52 @@ struct HabiticaDailiesView: View {
         !settingsManager.settings.apiToken.isEmpty
     }
 
+    @MainActor
     func load() async {
-        loading = true
-        let items = await HabiticaAPI.shared.fetchTasks(type: "dailys", settings: settingsManager.settings)
-        await MainActor.run {
-            dailies = items
+        let settings = settingsManager.settings
+        let signature = accountSignature
+        if loadedAccount != signature {
+            dailies = []
+            inFlightIds.removeAll()
+            accountGeneration += 1
             loading = false
+            loadedAccount = signature
         }
+        guard !loading else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        guard isConfigured else {
+            dailies = []
+            inFlightIds.removeAll()
+            loading = false
+            return
+        }
+        loading = true
+        let items = await HabiticaAPI.shared.fetchTasks(type: "dailys", settings: settings)
+        guard accountSignature == signature, loadGeneration == generation else { return }
+        if api.lastError == nil { dailies = items }
+        loading = false
     }
 
     func toggle(item: HabiticaTaskItem) {
+        guard isConfigured, !inFlightIds.contains(item.id) else { return }
+        let settings = settingsManager.settings
+        let signature = accountSignature
+        inFlightIds.insert(item.id)
+        let generation = accountGeneration
         Task {
-            let result = await HabiticaAPI.shared.scoreTask(taskId: item.id, direction: item.completed ? "down" : "up", settings: settingsManager.settings)
+            let direction = item.completed ? "down" : "up"
+            let result = await HabiticaAPI.shared.scoreTask(taskId: item.id, direction: direction, settings: settings)
             await MainActor.run {
+                guard accountSignature == signature, loadedAccount == signature, accountGeneration == generation else { return }
                 if result != nil, let idx = dailies.firstIndex(where: { $0.id == item.id }) {
+                    let current = dailies[idx]
                     dailies[idx] = HabiticaTaskItem(
-                        id: item.id, text: item.text, notes: item.notes, value: item.value,
-                        completed: !item.completed, canUp: item.canUp, canDown: item.canDown, isDue: item.isDue)
+                        id: current.id, text: current.text, notes: current.notes, value: current.value,
+                        completed: direction == "up", canUp: current.canUp, canDown: current.canDown, isDue: current.isDue)
                     Task { await engine.refreshHabitica() }
                 }
+                inFlightIds.remove(item.id)
             }
         }
     }
@@ -257,6 +356,7 @@ struct HabiticaDailiesView: View {
 // MARK: - Daily Row
 struct DailyRow: View {
     let item: HabiticaTaskItem
+    let busy: Bool
     let onToggle: () -> Void
 
     var body: some View {
@@ -267,6 +367,7 @@ struct DailyRow: View {
                     .font(.system(size: 17))
             }
             .buttonStyle(.borderless)
+            .disabled(busy)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.text)
@@ -300,9 +401,12 @@ struct DailyRow: View {
 struct HabiticaProfileView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject private var api = HabiticaAPI.shared
 
     @State private var profile: HabiticaProfile? = nil
     @State private var loading = false
+    @State private var loadedAccount = ""
+    @State private var loadGeneration = 0
 
     var body: some View {
         Group {
@@ -420,7 +524,19 @@ struct HabiticaProfileView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task { await load() }
+        .safeAreaInset(edge: .top) {
+            if isConfigured {
+                VStack(spacing: 4) {
+                    HStack {
+                        if loading { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Button("刷新") { Task { await load() } }.disabled(loading)
+                    }
+                    if let error = api.lastError { Text(error).font(.caption).foregroundColor(.orange) }
+                }.padding(.horizontal, 24).padding(.vertical, 6)
+            }
+        }
+        .task(id: accountSignature) { await load() }
     }
 
     private var isConfigured: Bool {
@@ -441,13 +557,29 @@ struct HabiticaProfileView: View {
         return f.string(from: d)
     }
 
+    private var accountSignature: String {
+        let settings = settingsManager.settings
+        return "\(settings.connectHabitica)|\(settings.uid)|\(settings.apiToken)|\(settings.developerServerUrl)"
+    }
+
+    @MainActor
     func load() async {
-        loading = true
-        let p = await HabiticaAPI.shared.fetchProfile(settings: settingsManager.settings)
-        await MainActor.run {
-            profile = p
+        let settings = settingsManager.settings
+        let signature = accountSignature
+        if loadedAccount != signature {
+            profile = nil
             loading = false
+            loadedAccount = signature
         }
+        guard !loading else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        guard isConfigured else { profile = nil; return }
+        loading = true
+        let result = await HabiticaAPI.shared.fetchProfile(settings: settings)
+        guard accountSignature == signature, loadGeneration == generation else { return }
+        if let result = result { profile = result }
+        loading = false
     }
 }
 

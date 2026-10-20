@@ -1,14 +1,14 @@
 import Cocoa
 import Carbon
 
-// MARK: - Global HotKey Manager (Alt+Shift+P)
+// MARK: - Global HotKey Manager (Option+Command+P)
 class HotKeyManager {
     static let shared = HotKeyManager()
 
     private var hotKeyRef: EventHotKeyRef?
 
     func register() {
-        // Alt+Shift+P = keyCode 35 (P) + option + shift
+        // Option+Command+P = kVK_ANSI_P + command + option
         let eventId = EventHotKeyID(signature: OSType(0x48504f4d), id: 1)  // "HPOM"
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
@@ -39,7 +39,7 @@ class HotKeyManager {
         // Use the modern way
         InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
             DispatchQueue.main.async {
-                PomodoroEngine.shared.activate()
+                PomodoroEngine.shared.togglePomodoro()
             }
             return noErr
         }, 1, eventSpec, nil, nil)

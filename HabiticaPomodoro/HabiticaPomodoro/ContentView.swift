@@ -81,6 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Start habitica sync
         Task { await PomodoroEngine.shared.initHabiticaTasks() }
         PomodoroEngine.shared.loadTodayCount()
+        PomodoroFileChanges.shared.startMonitoring()
 
         // Setup global hotkey via Carbon (Alt+Shift+P)
         HotKeyManager.shared.register()
@@ -93,6 +94,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Start with timer window visible
         showTimerWindow()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        PomodoroFileChanges.shared.syncFromDiskIfNeeded()
+        PomodoroEngine.shared.resyncAfterForeground()
+        BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
     }
 
     // 供快捷键使用：确保主窗口可见
@@ -223,6 +230,8 @@ struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
     @ObservedObject var tabState = AppTabState.shared
+    @ObservedObject private var settingsManager = SettingsManager.shared
+    @State private var showAbandonConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -249,10 +258,18 @@ struct TimerView: View {
         }
         .frame(width: 470, height: 820)
         .background(Color(NSColor.windowBackgroundColor))
+        .confirmationDialog("放弃当前番茄？时间块中的植物将记为枯萎。",
+                            isPresented: $showAbandonConfirm, titleVisibility: .visible) {
+            Button("放弃番茄", role: .destructive) {
+                engine.pomodoroInterrupted(breakStreak: true)
+            }
+            Button("取消", role: .cancel) {}
+        }
     }
 
     // MARK: - Pomo Tab（番茄钟相关）
     var pomoTab: some View {
+        ScrollView {
         VStack(spacing: 12) {
             // Tomato / status circle
             ZStack {
@@ -278,7 +295,7 @@ struct TimerView: View {
                     }
                 }
             }
-            .onTapGesture { engine.activate() }
+            .onTapGesture { engine.togglePomodoro() }
             .padding(.top, 12)
 
             // Today count
@@ -303,7 +320,7 @@ struct TimerView: View {
 
             // Action buttons row
             HStack(spacing: 12) {
-                if engine.settings.showSkipToBreakOpt && (engine.phase == .pomodoro) && !engine.isFrozen {
+                if engine.phase == .pomodoro {
                     Button(action: { engine.skipToBreak() }) {
                         Image(systemName: "forward.fill")
                             .font(.title3)
@@ -312,17 +329,26 @@ struct TimerView: View {
                     .help("Skip to break")
                 }
 
-                Button(action: {
-                    engine.isFrozen ? engine.unfreeze() : engine.freeze()
-                }) {
-                    Image(systemName: engine.isFrozen ? "play.fill" : "pause.fill")
-                        .font(.title3)
+                if engine.isRunning || engine.isFrozen {
+                    Button(action: {
+                        engine.isFrozen ? engine.unfreeze() : engine.freeze()
+                    }) {
+                        Image(systemName: engine.isFrozen ? "play.fill" : "pause.fill")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(engine.isFrozen ? "Resume" : "Pause")
                 }
-                .buttonStyle(.borderless)
-                .help(engine.isFrozen ? "Resume" : "Freeze")
-                .opacity((engine.settings.showFreezeOpt && engine.phase == .pomodoro) ? 1 : 0)
 
-                if engine.phase == .breakTime || engine.phase == .breakExtension {
+                if engine.phase == .pomodoro {
+                    Button(action: { showAbandonConfirm = true }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Abandon pomodoro")
+                } else if engine.phase == .breakTime || engine.phase == .breakExtension {
                     Button(action: { engine.reset() }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title3)
@@ -363,12 +389,19 @@ struct TimerView: View {
                 Button("History") {
                     showHistoryWindow()
                 }
+                Menu("休息") {
+                    ForEach([1, 5, 15, 30], id: \.self) { minutes in
+                        Button("\(minutes) 分钟") { engine.takeBreak(duration: minutes) }
+                    }
+                }
+                .disabled(engine.phase != .idle || engine.isRunning || engine.isFrozen)
             }
             .font(.subheadline)
 
             Spacer()
         }
         .padding(24)
+        }
     }
 
     // MARK: - Task Tab（最重要的三件事）
@@ -423,6 +456,9 @@ struct TimerView: View {
 struct SettingsView: View {
     @ObservedObject var sm = SettingsManager.shared
     @ObservedObject var am = AudioManager.shared
+    @ObservedObject private var blockManager = BlockProgressManager.shared
+    @State private var showResetBlockConfirm = false
+    @State private var showClearBlocksConfirm = false
 
     var body: some View {
         TabView {
@@ -432,6 +468,19 @@ struct SettingsView: View {
             dataSettingsTab.tabItem { Label("Data", systemImage: "doc") }
         }
         .frame(width: 530, height: 630)
+        .onDisappear { am.stopPreview() }
+        .confirmationDialog("重置当前块的完成数？历史种植记录保留。",
+                            isPresented: $showResetBlockConfirm, titleVisibility: .visible) {
+            Button("重置当前块", role: .destructive) {
+                blockManager.resetCurrentBlockProgress(settings: sm.settings)
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog("清空全部时间块及植物历史？此操作不可撤销。",
+                            isPresented: $showClearBlocksConfirm, titleVisibility: .visible) {
+            Button("清空时间块历史", role: .destructive) { blockManager.clearHistory() }
+            Button("取消", role: .cancel) {}
+        }
     }
 
     var timerSettingsTab: some View {
@@ -449,8 +498,6 @@ struct SettingsView: View {
                 Group {
                     Toggle("Start breaks manually", isOn: $sm.settings.manualBreak)
                     Toggle("Reset timer after break extension", isOn: $sm.settings.resetPomoAfterBreak)
-                    Toggle("Show skip-to-break button", isOn: $sm.settings.showSkipToBreakOpt)
-                    Toggle("Show freeze button", isOn: $sm.settings.showFreezeOpt)
                 }
                 Divider()
                 Group {
@@ -463,7 +510,7 @@ struct SettingsView: View {
                     sliderRow("Volume", value: $sm.settings.ambientSoundVolume)
                 }
                 Divider()
-                Text("HotKey: ⌥⇧P (Alt+Shift+P)")
+                Text("HotKey: ⌥⌘P (Option+Command+P)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -483,6 +530,13 @@ struct SettingsView: View {
                         Text("Block Settings").font(.headline)
                         stepperRow("Blocks per day", value: $sm.settings.blockCount, range: 1...24, suffix: "blocks")
                         stepperRow("Pomodoros per block", value: $sm.settings.blockPomoCount, range: 1...12, suffix: "pomodoros")
+                        Toggle("Reward when block complete", isOn: $sm.settings.blockRewardEnabled)
+                        Toggle("Sprint reminder", isOn: $sm.settings.blockSprintReminder)
+                        Toggle("Remind before block starts", isOn: $sm.settings.blockStartReminder)
+                        if sm.settings.blockStartReminder {
+                            stepperRow("Reminder lead time", value: $sm.settings.blockReminderMinutes,
+                                       range: 1...60, suffix: "min")
+                        }
 
                         Divider()
 
@@ -525,7 +579,7 @@ struct SettingsView: View {
                                             sm.settings.blockTimeRanges[blockIndex].startMinute = newValue
                                         }
                                     )) {
-                                        ForEach([0, 30], id: \.self) { minute in
+                                        ForEach(0..<60, id: \.self) { minute in
                                             Text(String(format: ":%02d", minute)).tag(minute)
                                         }
                                     }
@@ -542,7 +596,7 @@ struct SettingsView: View {
                                             sm.settings.blockTimeRanges[blockIndex].endHour = newValue
                                         }
                                     )) {
-                                        ForEach(1..<24, id: \.self) { hour in
+                                        ForEach(0..<24, id: \.self) { hour in
                                             Text(String(format: "%02d:00", hour)).tag(hour)
                                         }
                                     }
@@ -556,7 +610,7 @@ struct SettingsView: View {
                                             sm.settings.blockTimeRanges[blockIndex].endMinute = newValue
                                         }
                                     )) {
-                                        ForEach([0, 30], id: \.self) { minute in
+                                        ForEach(0..<60, id: \.self) { minute in
                                             Text(String(format: ":%02d", minute)).tag(minute)
                                         }
                                     }
@@ -587,15 +641,10 @@ struct SettingsView: View {
 
                         Divider()
 
-                        Button("Reset Block Progress") {
-                            BlockProgressManager.shared.blockProgress.resetBlock()
-                            BlockProgressManager.shared.saveProgress()
-                        }
+                        Button("Reset Block Progress") { showResetBlockConfirm = true }
                         .foregroundColor(.orange)
 
-                        Button("Clear Block History") {
-                            BlockProgressManager.shared.clearHistory()
-                        }
+                        Button("Clear Block History") { showClearBlocksConfirm = true }
                         .foregroundColor(.red)
                     }
                 }
@@ -625,9 +674,25 @@ struct SettingsView: View {
                     Toggle("+ habit when pomodoro done", isOn: $sm.settings.pomoHabitPlus)
                     Toggle("- habit if stopped early", isOn: $sm.settings.pomoHabitMinus)
                     Toggle("- habit if break extension over", isOn: $sm.settings.breakExtentionFails)
+                    Toggle("Use custom Pomodoro Habit ID", isOn: $sm.settings.customPomodoroTask)
+                    if sm.settings.customPomodoroTask {
+                        TextField("Pomodoro Habit ID", text: Binding(
+                            get: { sm.settings.pomodoroTaskId ?? "" },
+                            set: { sm.settings.pomodoroTaskId = $0.isEmpty ? nil : $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
                     Divider()
                     Text("Pomodoro Combo Habit").font(.headline)
                     Toggle("+ habit for set complete", isOn: $sm.settings.pomoSetHabitPlus)
+                    Toggle("Use custom Combo Habit ID", isOn: $sm.settings.customSetTask)
+                    if sm.settings.customSetTask {
+                        TextField("Combo Habit ID", text: Binding(
+                            get: { sm.settings.pomodoroSetTaskId ?? "" },
+                            set: { sm.settings.pomodoroSetTaskId = $0.isEmpty ? nil : $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
                     Divider()
                     Text("Notifications").font(.headline)
                     Toggle("Mobile notification - short break over", isOn: $sm.settings.breakExtentionNotify)
@@ -636,6 +701,8 @@ struct SettingsView: View {
                     Text("Developer Server URL (leave empty for default):")
                     TextField("https://habitica.com/api/v3/", text: $sm.settings.developerServerUrl)
                         .textFieldStyle(.roundedBorder)
+                    Text("自定义服务会收到 User ID 和 API Token；只使用你信任的 HTTPS 地址。")
+                        .font(.caption).foregroundColor(.secondary)
                 }
             }
             .padding()
@@ -703,16 +770,26 @@ struct SettingsView: View {
     }
     
     private func syncAllData() {
-        SettingsManager.shared.save()
-        BlockProgressManager.shared.saveProgress()
-        BlockProgressManager.shared.saveHistory()
-        BlockProgressManager.shared.saveDailyBlocks()
-        TopThreeManager.shared.save()
+        PomodoroFileChanges.shared.syncFromDiskIfNeeded()
+        var failedFiles: [String] = []
+        if !SettingsManager.shared.save() { failedFiles.append("habitica_pomodoro_settings.json") }
+        if !BlockProgressManager.shared.saveProgress() { failedFiles.append("habitica_pomodoro_block_progress.json") }
+        if !BlockProgressManager.shared.saveHistory() { failedFiles.append("habitica_pomodoro_block_history.json") }
+        if !BlockProgressManager.shared.saveDailyBlocks() { failedFiles.append("habitica_pomodoro_daily_blocks.json") }
+        if !TopThreeManager.shared.save() { failedFiles.append("habitica_pomodoro_top_three.json") }
+        if !HistogramManager.shared.save() { failedFiles.append("habitica_pomodoro_histogram.json") }
+        if !PlantJournal.shared.save() { failedFiles.append("habitica_pomodoro_plants.json") }
         
         let alert = NSAlert()
-        alert.messageText = "Saved"
-        alert.informativeText = "All data saved to Documents/.habitica-pomodoro"
-        alert.alertStyle = .informational
+        if failedFiles.isEmpty {
+            alert.messageText = "Saved"
+            alert.informativeText = "All data saved to \(PomodoroDataDir.url.path)"
+            alert.alertStyle = .informational
+        } else {
+            alert.messageText = "Save Failed"
+            alert.informativeText = "The following files were not saved:\n" + failedFiles.joined(separator: "\n")
+            alert.alertStyle = .warning
+        }
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -733,6 +810,18 @@ struct SettingsView: View {
                 ForEach(options, id: \.self) { Text($0.replacingOccurrences(of: ".mp3", with: "")) }
             }
             .frame(width: 140)
+            Button {
+                let volume: Double
+                if label == "Pomodoro end sound" { volume = sm.settings.pomoEndSoundVolume }
+                else if label == "Break end sound" { volume = sm.settings.breakEndSoundVolume }
+                else { volume = sm.settings.ambientSoundVolume }
+                am.playSound(selection.wrappedValue, volume: volume)
+            } label: {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(selection.wrappedValue == "None")
+            .help("Preview sound")
         }
     }
 
@@ -745,18 +834,6 @@ struct SettingsView: View {
                 .font(.caption)
                 .frame(width: 35)
         }
-    }
-}
-
-// extension for optional bool settings - always shown in native app
-extension UserSettings {
-    var showSkipToBreakOpt: Bool {
-        get { true }
-        set { /* always visible in native */ }
-    }
-    var showFreezeOpt: Bool {
-        get { true }
-        set { /* always visible in native */ }
     }
 }
 
@@ -895,6 +972,7 @@ private struct PlantMarkerView: View {
 // MARK: - History View
 struct HistoryView: View {
     @ObservedObject var hm = HistogramManager.shared
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -958,13 +1036,19 @@ struct HistoryView: View {
             }
 
             HStack {
-                Button("Clear History") {
-                    hm.clear()
-                }
+                Button("Clear History") { showClearConfirm = true }
                 .foregroundColor(.red)
             }
         }
         .padding(24)
+        .confirmationDialog("清空番茄统计？时间块和种植历史不会被删除。",
+                            isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("清空番茄统计", role: .destructive) {
+                hm.clear()
+                PomodoroEngine.shared.loadTodayCount()
+            }
+            Button("取消", role: .cancel) {}
+        }
     }
 
     func lastN(_ n: Int) -> [(String, DayHistogram)] {

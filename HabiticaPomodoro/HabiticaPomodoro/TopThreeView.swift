@@ -12,6 +12,15 @@ struct TopThreeView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 14) {
+                HStack {
+                    Text("每日任务").font(.headline)
+                    Spacer()
+                    Button(manager.syncInProgress ? "同步中…" : "同步 Habitica") {
+                        Task { await manager.synchronize(settings: settings) }
+                    }
+                    .disabled(manager.syncInProgress || !settings.connectHabitica || settings.uid.isEmpty || settings.apiToken.isEmpty)
+                }
+                if let message = manager.syncMessage { Text(message).font(.caption).foregroundColor(.secondary) }
                 // ── Today 卡片：绿色调，可编辑 ──
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 6) {
@@ -88,6 +97,10 @@ struct TopThreeView: View {
             .padding(.top, 16)
             .padding(.bottom, 16)
         }
+        .task { await manager.synchronize(settings: settings) }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            manager.objectWillChange.send()
+        }
     }
 
     private func shortDate(_ key: String) -> String {
@@ -107,7 +120,7 @@ struct TopThreeCategorySection: View {
     let editable: Bool
     let canMoveToToday: Bool
 
-    @State private var editingIndex: Int? = nil
+    @State private var editingUUID: UUID? = nil
     @State private var draftTitle: String = ""
     @State private var renamingCategory = false
     @State private var draftCategoryName: String = ""
@@ -166,30 +179,33 @@ struct TopThreeCategorySection: View {
             .padding(.leading, 2)
 
             // 任务列表
-            ForEach(Array(tasks.enumerated()), id: \.element.id) { index, task in
+            ForEach(tasks) { task in
                 TaskRow(
                     task: task,
                     editable: editable,
-                    isEditing: editable && editingIndex == index,
+                    isEditing: editable && editingUUID == task.id,
                     draftTitle: $draftTitle,
                     canMove: canMoveToToday && !task.isCompleted && !task.movedToToday && !task.title.isEmpty,
                     onToggle: {
-                        manager.toggleTask(key: dateKey, category: category, index: index, settings: settings)
+                        manager.toggleTask(key: dateKey, category: category, id: task.id, settings: settings)
                     },
                     onStartEdit: {
-                        editingIndex = index
+                        guard editable, manager.isEditable(key: dateKey, settings: settings),
+                              tasks.contains(where: { $0.id == task.id && !$0.movedToToday }) else { return }
+                        editingUUID = task.id
                         draftTitle = task.title
                     },
                     onCommitEdit: {
-                        manager.setTaskTitle(key: dateKey, category: category, index: index, title: draftTitle, settings: settings)
-                        editingIndex = nil
+                        guard editable, editingUUID == task.id else { return }
+                        manager.setTaskTitle(key: dateKey, category: category, id: task.id, title: draftTitle, settings: settings)
+                        editingUUID = nil
                     },
-                    onCancelEdit: { editingIndex = nil },
+                    onCancelEdit: { editingUUID = nil },
                     onMoveToToday: {
-                        manager.moveTaskToToday(fromKey: dateKey, category: category, index: index, settings: settings)
+                        manager.moveTaskToToday(fromKey: dateKey, category: category, id: task.id, settings: settings)
                     },
                     onDelete: editable ? {
-                        manager.removeTask(key: dateKey, category: category, index: index, settings: settings)
+                        manager.removeTask(key: dateKey, category: category, id: task.id, settings: settings)
                     } : nil
                 )
             }
@@ -211,13 +227,25 @@ struct TopThreeCategorySection: View {
                 .padding(.leading, 8)
             } else if editable && manager.taskLimit(category: category) != nil {
                 // 固定分类已满 3 条
-                Text("已满 3 件，完成或删除后可再添加")
+                Text("已满 3 件，删除后可再添加")
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(0.6))
                     .padding(.leading, 8)
                     .padding(.vertical, 1)
             }
         }
+        .onChange(of: tasks.filter { !$0.movedToToday }.map(\.id)) { ids in
+            if let id = editingUUID, !ids.contains(id) { cancelEditing() }
+        }
+        .onChange(of: dateKey) { _ in cancelEditing() }
+        .onChange(of: category) { _ in cancelEditing() }
+        .onChange(of: editable) { value in if !value { cancelEditing() } }
+        .onDisappear { cancelEditing() }
+    }
+
+    private func cancelEditing() {
+        editingUUID = nil
+        draftTitle = ""
     }
 
     private var placeholder: String {

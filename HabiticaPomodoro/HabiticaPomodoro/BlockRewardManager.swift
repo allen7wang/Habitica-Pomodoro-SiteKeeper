@@ -7,16 +7,16 @@ class BlockRewardManager {
     private let habiticaAPI = HabiticaAPI.shared
     
     // 块完成后发送奖励
-    func sendBlockReward(settings: UserSettings, blockIndex: Int, blockGoal: String) async {
+    func sendBlockReward(settings: UserSettings, blockIndex: Int, blockGoal: String, habitId: String? = nil) async {
         guard settings.blockRewardEnabled else { return }
         guard settings.connectHabitica else { return }
         
-        let taskTitle = "Block \(blockIndex + 1) Complete"
-        let taskNote = "Completed block with goal: \(blockGoal.isEmpty ? "None" : blockGoal)"
+        // Reuse the resolved default/custom habit, not only the optional custom-ID setting.
         
         // 使用现有的 pomodoro habit 来奖励（可以扩展为专用 habit）
-        let habitId = settings.pomodoroTaskId
-        guard let hid = habitId else { return }
+        var resolved = habitId
+        if resolved == nil { resolved = await habiticaAPI.ensurePomodoroHabit(settings: settings) }
+        guard let hid = resolved else { return }
         
         if let result = await habiticaAPI.scoreHabit(
             taskId: hid,

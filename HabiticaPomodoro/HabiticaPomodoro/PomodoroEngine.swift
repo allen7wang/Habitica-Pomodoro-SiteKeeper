@@ -1,560 +1,541 @@
 import Foundation
 import SwiftUI
+import Combine
 import AVFoundation
 import UserNotifications
 
-// MARK: - Notification Names
 extension Notification.Name {
     static let badgeUpdate = Notification.Name("badgeUpdate")
 }
 
-// MARK: - Timer State
 enum TimerPhase: String { case idle, pomodoro, breakTime, breakExtension, manualBreak }
 enum TomatoState { case wait, progress, freeze, breakTime, win, warning }
 
-// MARK: - Pomodoro Engine
+/// One phase machine on both platforms. Local completion is synchronous; network work never owns transitions.
 class PomodoroEngine: ObservableObject {
     static let shared = PomodoroEngine()
-
-    // Published state
-    @Published var timerString: String = "00:00"
-    @Published var timerValue: Int = 0
-    @Published var isRunning: Bool = false
-    @Published var isFrozen: Bool = false
+    @Published var timerString = "00:00"
+    @Published var timerValue = 0
+    @Published var isRunning = false
+    @Published var isFrozen = false
     @Published var phase: TimerPhase = .idle
-    @Published var pomoSetCounter: Int = 0
+    @Published var pomoSetCounter = 0
     @Published var tomatoState: TomatoState = .wait
-    @Published var todayPomodoros: Int = 0
+    @Published var todayPomodoros = 0
     @Published var habiticaMonies: Double = 0
     @Published var habiticaExp: Double = 0
     @Published var habiticaHp: Double = 0
-    @Published var habiticaConnected: Bool = false
-    @Published var lastNotification: String = ""
+    @Published var habiticaConnected = false
+    @Published var lastNotification = ""
 
-    // Internal
     private var timer: Timer?
-    private var duringHandler: (() -> Void)?
-    private var endHandler: (() -> Void)?
-    /// 当前阶段的绝对结束时刻（iOS 后台 Timer 会被挂起，回前台据此重算剩余时间）
+    private var endHandler: ((Date) -> Void)?
     private(set) var phaseEndsAt: Date?
+    private var phaseDuration = 0
+    private var lastTickAt: Date?
+    private var activePomodoroSettings: UserSettings?
+    private var activeBreakSettings: UserSettings?
+    private var activeBreakExtensionSettings: UserSettings?
+    private var completedSet = false
+    private var customBreak = false
+    private var pendingBreakSeconds = 0
     private var pomodoroTaskId: String?
     private var pomodoroSetTaskId: String?
-    private var api = HabiticaAPI.shared
-    private var settingsManager = SettingsManager.shared
-    private var audioManager = AudioManager.shared
-    private var histogramManager = HistogramManager.shared
+    private var taskAccountSignature = ""
+    private var settingsSubscription: AnyCancellable?
+    private let api = HabiticaAPI.shared
+    private let settingsManager = SettingsManager.shared
+    private let audioManager = AudioManager.shared
+    private let histogramManager = HistogramManager.shared
 
     #if os(iOS)
     static let backgroundEndNotificationId = "pomo-phase-end"
     #endif
-
     var settings: UserSettings { settingsManager.settings }
 
-    // MARK: - Activate (main button / hotkey)
-    func activate() {
-        if isFrozen {
-            unfreeze()
-        } else if phase == .manualBreak {
-            startBreak()
-        } else if !isRunning || phase == .breakTime || phase == .breakExtension {
-            if pomoSetCounter == settings.pomoSetNum {
-                reset()
-            } else {
-                startPomodoro()
+    init() {
+        settingsSubscription = settingsManager.$settings
+            .map { [weak self] in "\(self?.accountSignature($0) ?? "")|\($0.connectHabitica)" }
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.pomodoroTaskId = nil
+                self.pomodoroSetTaskId = nil
+                self.taskAccountSignature = ""
+                self.habiticaMonies = 0
+                self.habiticaExp = 0
+                self.habiticaHp = 0
+                self.habiticaConnected = false
+                self.api.monies = 0
+                self.api.exp = 0
+                self.api.hp = 0
+                self.api.isAuthenticated = false
+                self.api.lastError = nil
             }
-        } else {
-            // Running pomodoro → interrupted
-            pomodoroInterrupted(breakStreak: true)
+        NotificationCenter.default.addObserver(forName: .histogramChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.loadTodayCount()
         }
     }
 
-    // MARK: - Start Pomodoro
+    func activate() {
+        if isFrozen { unfreeze() }
+        else if phase == .manualBreak { startBreak() }
+        else if !isRunning || phase == .breakTime || phase == .breakExtension { startPomodoro() }
+        else { pomodoroInterrupted(breakStreak: true) }
+    }
+
+    func togglePomodoro() {
+        if isFrozen { unfreeze() }
+        else if isRunning && phase == .pomodoro { freeze() }
+        else { activate() }
+        notifyBadge()
+    }
+
     func startPomodoro() {
+        guard phase != .pomodoro else { return }
         #if os(iOS)
         requestNotificationPermissionIfNeeded()
         #endif
-        stopTimer()
-        let duration = settings.pomoDurationMins * 60
-        isRunning = true
-        phase = .pomodoro
-        isFrozen = false
-        startTimer(duration: duration, during: { [weak self] in
-            self?.duringPomodoro()
-        }, end: { [weak self] in
-            Task { await self?.pomodoroEnds() }
-        })
-        updateTomato()
-        audioManager.playAmbient(sound: settings.ambientSound, volume: settings.ambientSoundVolume)
+        if completedSet { pomoSetCounter = 0 }
+        completedSet = false
+        customBreak = false
+        let configuration = phaseSnapshot(settings)
+        activePomodoroSettings = configuration
+        activeBreakSettings = nil
+        activeBreakExtensionSettings = nil
+        beginPhase(.pomodoro, duration: configuration.pomoDurationMins * 60) { [weak self] date in
+            self?.completePomodoro(at: date)
+        }
+        audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
     }
 
-    // MARK: - During Pomodoro
-    private func duringPomodoro() {
-        updateTomato()
-        audioManager.playAmbient(sound: settings.ambientSound, volume: settings.ambientSoundVolume)
-        // Notify badge to update
-        NotificationCenter.default.post(name: .badgeUpdate, object: nil)
-    }
-
-    // MARK: - Pomodoro Ends
+    /// Compatibility entry point; duplicate callbacks after a transition cannot count twice.
     func pomodoroEnds() async {
+        await MainActor.run { self.completePomodoro(at: self.phaseEndsAt ?? Date()) }
+    }
+
+    private func completePomodoro(at date: Date) {
+        guard phase == .pomodoro, !isFrozen, let configuration = activePomodoroSettings else { return }
+        activePomodoroSettings = nil
         stopTimer()
         audioManager.stopAmbient()
-        histogramManager.incrementToday(pomodoros: 1, minutes: settings.pomoDurationMins)
-        await MainActor.run {
-            self.todayPomodoros = histogramManager.getToday()?.pomodoros ?? 0
-        }
-
-        var msg = "Pomodoro ended.\nYou have done \(histogramManager.getToday()?.pomodoros ?? 0) today!"
-        let setComplete = pomoSetCounter >= settings.pomoSetNum - 1
-
-        // MARK: - Block Mode Logic
-        if settings.enableBlockMode {
-            // 根据当前时间确定属于哪个块
-            BlockProgressManager.shared.recordPomoInCurrentBlock(
-                settings: settings, comboCompleted: setComplete
-            )
-
-            let (completed, total) = BlockProgressManager.shared.getCurrentBlockCompletion(settings: settings)
-            let bp = BlockProgressManager.shared.blockProgress
-
-            if completed >= total {
-                // Block Complete
-                BlockProgressManager.shared.recordBlockComplete(settings: settings)
-                let goal = bp.getBlockGoal(goals: settings.blockGoals)
-                let blockIdx = bp.currentBlockIndex
-                
-                // 发送块奖励
-                await BlockRewardManager.shared.sendBlockReward(settings: settings, blockIndex: blockIdx, blockGoal: goal)
-                
-                // 获取休息建议
-                let breakSuggestion = BlockRewardManager.shared.suggestBreakType(settings: settings, blockIndex: blockIdx)
-                
-                msg = "Block \(blockIdx + 1) Complete! 🎉\nGoal: \(goal.isEmpty ? "No goal" : goal)\n\n\(breakSuggestion)"
-
-                // 不再自动切换块，让时间决定块索引
-                BlockProgressManager.shared.saveProgress()
+        histogramManager.incrementToday(pomodoros: 1, minutes: configuration.pomoDurationMins, date: date)
+        loadTodayCount()
+        pomoSetCounter += 1
+        completedSet = pomoSetCounter >= configuration.pomoSetNum
+        pendingBreakSeconds = (completedSet ? configuration.longBreakDuration : configuration.breakDuration) * 60
+        activeBreakSettings = configuration
+        var message = "Pomodoro ended.\nYou have done \(todayPomodoros) today!"
+        var rewardBlock: Int?
+        var rewardGoal = ""
+        if configuration.enableBlockMode {
+            let manager = BlockProgressManager.shared
+            manager.recordPomoInCurrentBlock(settings: configuration, comboCompleted: completedSet, date: date)
+            let index = manager.blockProgress.currentBlockIndex
+            let progress = manager.progress(settings: configuration, date: date)
+            let count = progress.indices.contains(index) ? progress[index] : 0
+            rewardGoal = manager.blockProgress.getBlockGoal(goals: configuration.blockGoals)
+            if count >= configuration.blockPomoCount && manager.recordBlockComplete(settings: configuration, date: date) {
+                rewardBlock = index
+                message = "Block \(index + 1) Complete! 🎉\nGoal: \(rewardGoal)\n\(BlockRewardManager.shared.suggestBreakType(settings: configuration, blockIndex: index))"
             } else {
-                // Still working on current block
-                let goal = bp.getBlockGoal(goals: settings.blockGoals)
-                msg = "Pomodoro ended.\nCurrent Block (\(bp.currentBlockIndex + 1)): \(completed)/\(total)\nGoal: \(goal)"
+                message = "Pomodoro ended.\nCurrent Block (\(index + 1)): \(count)/\(configuration.blockPomoCount)\nGoal: \(rewardGoal)"
             }
-            // Notify badge to update
-            NotificationCenter.default.post(name: .badgeUpdate, object: nil)
+            BlockNotificationManager.shared.checkReminders(settings: configuration)
         }
-
-        if settings.pomoHabitPlus || (setComplete && settings.pomoSetHabitPlus) {
-            await api.fetchUserData(settings: settings, silent: true)
-            let habitId = setComplete && settings.pomoSetHabitPlus ? pomodoroSetTaskId : pomodoroTaskId
-            if let hid = habitId, let result = await api.scoreHabit(taskId: hid, direction: "up", settings: settings) {
-                let deltaGold = (result["gp"] ?? 0) - api.monies
-                let deltaExp = (result["exp"] ?? 0) - api.exp
-                let expText = deltaExp < 0 ? "You leveled up!" : "You Earned Exp: +\(String(format: "%.2f", deltaExp))"
-                if !settings.enableBlockMode {
-                    msg = "You Earned Gold: +\(String(format: "%.2f", deltaGold))\n\(expText)"
-                }
-                await api.fetchUserData(settings: settings, silent: true)
-                await MainActor.run {
-                    self.habiticaMonies = api.monies
-                    self.habiticaExp = api.exp
-                    self.habiticaHp = api.hp
+        sendNotification(title: completedSet ? "Pomodoro Set Complete!" : "Time's Up", body: message)
+        audioManager.playSound(configuration.pomoEndSound, volume: configuration.pomoEndSoundVolume)
+        let setComplete = completedSet
+        // Advance before awaiting anything: offline/slow scoring must never delay the break or resurrect a reset.
+        if configuration.manualBreak { manualBreak() }
+        else { startBreak(at: date) }
+        Task {
+            guard var requestSettings = self.phaseRequestSettings(configuration) else { return }
+            let signature = self.accountSignature(configuration)
+            let pomoId = signature == self.taskAccountSignature ? self.pomodoroTaskId : nil
+            let setId = signature == self.taskAccountSignature ? self.pomodoroSetTaskId : nil
+            let needsPomo = configuration.pomoHabitPlus || (rewardBlock != nil && configuration.blockRewardEnabled)
+            var resolvedPomo: String? = pomoId
+            if needsPomo && resolvedPomo == nil { resolvedPomo = await self.api.ensurePomodoroHabit(settings: requestSettings) }
+            if configuration.pomoHabitPlus, let id = resolvedPomo {
+                guard let refreshed = self.phaseRequestSettings(configuration) else { return }
+                requestSettings = refreshed
+                _ = await self.api.scoreHabit(taskId: id, direction: "up", settings: requestSettings)
+            }
+            if setComplete && configuration.pomoSetHabitPlus {
+                guard let refreshed = self.phaseRequestSettings(configuration) else { return }
+                requestSettings = refreshed
+                var resolved = setId
+                if resolved == nil { resolved = await self.api.ensurePomodoroSetHabit(settings: requestSettings) }
+                if let id = resolved, let refreshed = self.phaseRequestSettings(configuration) {
+                    _ = await self.api.scoreHabit(taskId: id, direction: "up", settings: refreshed)
                 }
             }
-        }
-
-        await MainActor.run {
-            self.pomoSetCounter += 1
-            if setComplete { self.sendNotification(title: "Pomodoro Set Complete!", body: msg) }
-            else { self.sendNotification(title: "Time's Up", body: msg) }
-        }
-
-        if settings.manualBreak {
-            await MainActor.run { self.manualBreak() }
-        } else {
-            startBreak()
-        }
-
-        await MainActor.run {
-            self.audioManager.playSound(self.settings.pomoEndSound, volume: self.settings.pomoEndSoundVolume)
-            self.isFrozen = false
-            self.updateTomato()
+            if let index = rewardBlock, let refreshed = self.phaseRequestSettings(configuration) {
+                await BlockRewardManager.shared.sendBlockReward(settings: refreshed, blockIndex: index, blockGoal: rewardGoal, habitId: resolvedPomo)
+            }
+            await self.refreshHabitica()
         }
     }
 
-    // MARK: - Start Break
-    func startBreak() {
-        stopTimer()
-        let duration: Int
-        if pomoSetCounter == settings.pomoSetNum {
-            duration = settings.longBreakDuration * 60
-        } else {
-            duration = settings.breakDuration * 60
+    func startBreak() { startBreak(at: Date()) }
+    private func startBreak(at date: Date) {
+        let configuration = activeBreakSettings ?? phaseSnapshot(settings)
+        activeBreakSettings = configuration
+        activeBreakExtensionSettings = nil
+        audioManager.stopAmbient()
+        let duration = pendingBreakSeconds > 0 ? pendingBreakSeconds : (completedSet ? configuration.longBreakDuration : configuration.breakDuration) * 60
+        beginPhase(.breakTime, duration: duration, startingAt: date) { [weak self] date in
+            self?.finishBreak(at: date)
         }
-        isRunning = true
-        phase = .breakTime
-        isFrozen = false
-        startTimer(duration: duration, during: { [weak self] in
-            self?.duringBreak()
-        }, end: { [weak self] in
-            self?.breakEnds()
-        })
-        updateTomato()
     }
 
-    // MARK: - Manual Break (waiting for user click)
     func manualBreak() {
         stopTimer()
-        isRunning = false
         phase = .manualBreak
         timerString = "GOOD!"
         updateTomato()
+        notifyBadge()
     }
 
-    private func duringBreak() {
-        updateTomato()
-    }
-
-    // MARK: - Break Ends
-    func breakEnds() {
-        let onManualTakeBreak = false
+    func breakEnds() { finishBreak(at: phaseEndsAt ?? Date()) }
+    private func finishBreak(at date: Date) {
+        guard phase == .breakTime else { return }
+        let isLong = completedSet || customBreak
+        let breakConfiguration = activeBreakSettings ?? phaseSnapshot(settings)
+        activeBreakSettings = nil
         stopTimer()
-        var msg: String
-
-        if pomoSetCounter == settings.pomoSetNum {
-            msg = "Long Break is over"
-            reset()
-            if settings.longBreakNotify {
-                Task { await api.sendPrivateMessage(msg, settings: settings) }
+        if isLong {
+            if completedSet { pomoSetCounter = 0 }
+            completedSet = false
+            customBreak = false
+            pendingBreakSeconds = 0
+            if breakConfiguration.longBreakNotify {
+                Task {
+                    guard let configuration = self.phaseRequestSettings(breakConfiguration) else { return }
+                    await api.sendPrivateMessage("Long Break is over", settings: configuration)
+                }
             }
         } else {
-            msg = "Back to work"
-            startBreakExtension(duration: settings.breakExtention * 60)
+            // Remind once at short-break completion, including zero grace. Not at grace startup.
+            if breakConfiguration.breakExtentionNotify {
+                let minutes = breakConfiguration.breakExtention
+                Task {
+                    guard let configuration = self.phaseRequestSettings(breakConfiguration) else { return }
+                    let message = minutes > 0 ? "Back to work! \(minutes) minutes left for Break Extension." : "Back to work!"
+                    await api.sendPrivateMessage(message, settings: configuration)
+                }
+            }
+            if breakConfiguration.breakExtention > 0 {
+                startBreakExtension(duration: breakConfiguration.breakExtention * 60, at: date, configuration: breakConfiguration)
+            } else {
+                // No grace countdown and no failure: preserve the earned combo.
+                timerString = "GO!"
+                pendingBreakSeconds = 0
+            }
         }
-
-        sendNotification(title: "Time's Up", body: msg)
-        audioManager.playSound(settings.breakEndSound, volume: settings.breakEndSoundVolume)
-        _ = onManualTakeBreak
+        sendNotification(title: "Time's Up", body: isLong ? "Break is over" : "Back to work")
+        audioManager.playSound(breakConfiguration.breakEndSound, volume: breakConfiguration.breakEndSoundVolume)
         updateTomato()
+        notifyBadge()
     }
 
-    // MARK: - Break Extension
     func startBreakExtension(duration: Int) {
-        stopTimer()
-        isRunning = true
-        phase = .breakExtension
-        isFrozen = false
-        let endFunc: () -> Void = settings.resetPomoAfterBreak ? { [weak self] in
-            self?.pomodoroInterrupted(breakStreak: true)
-        } : { [weak self] in
-            self?.pomodoroInterrupted(breakStreak: false)
-        }
-        startTimer(duration: duration, during: { [weak self] in
-            self?.duringBreakExtension()
-        }, end: endFunc)
-        if settings.breakExtentionNotify {
-            Task { await api.sendPrivateMessage("Back to work! \(settings.breakExtention) minutes left for Break Extension.", settings: settings) }
-        }
-        updateTomato()
+        startBreakExtension(duration: duration, at: Date(), configuration: phaseSnapshot(settings))
     }
-
-    private func duringBreakExtension() {
-        updateTomato()
-    }
-
-    // MARK: - Pomodoro Interrupted
-    func pomodoroInterrupted(breakStreak: Bool) {
-        #if os(macOS)
-        if phase == .pomodoro && settings.enableBlockMode {
-            BlockProgressManager.shared.recordAbandonedPomo(settings: settings)
-        }
-        #endif
-        audioManager.stopAmbient()
-        let failedBreakExtension = settings.breakExtentionFails && phase == .breakExtension
-        let breakExtensionZero = !settings.breakExtentionFails && settings.breakExtention == 0
-
-        if breakStreak {
-            reset()
-        } else {
-            pauseTimer()
+    private func startBreakExtension(duration: Int, at date: Date, configuration: UserSettings) {
+        guard duration > 0 else {
+            activeBreakExtensionSettings = nil
+            stopTimer()
             timerString = "GO!"
+            return
+        }
+        activeBreakExtensionSettings = configuration
+        pendingBreakSeconds = 0
+        beginPhase(.breakExtension, duration: duration, startingAt: date) { [weak self] _ in
+            guard let self = self else { return }
+            self.pomodoroInterrupted(breakStreak: configuration.resetPomoAfterBreak)
         }
 
-        if breakExtensionZero { return }
+    }
 
-        if settings.pomoHabitMinus || failedBreakExtension {
+    func pomodoroInterrupted(breakStreak: Bool) {
+        let interruptedFocus = phase == .pomodoro
+        guard interruptedFocus || phase == .breakExtension else { return }
+        let configuration = (interruptedFocus ? activePomodoroSettings : activeBreakExtensionSettings) ?? phaseSnapshot(settings)
+        let failedExtension = phase == .breakExtension && configuration.breakExtentionFails
+        if interruptedFocus && configuration.enableBlockMode {
+            BlockProgressManager.shared.recordAbandonedPomo(settings: configuration)
+        }
+        activePomodoroSettings = nil
+        activeBreakSettings = nil
+        activeBreakExtensionSettings = nil
+        audioManager.stopAmbient()
+        stopTimer()
+        pendingBreakSeconds = 0
+        if breakStreak { pomoSetCounter = 0; completedSet = false }
+        else { timerString = "GO!" }
+        if (interruptedFocus && configuration.pomoHabitMinus) || failedExtension {
             Task {
-                await api.fetchUserData(settings: settings, silent: true)
-                if let hid = pomodoroTaskId, let result = await api.scoreHabit(taskId: hid, direction: "down", settings: settings) {
-                    let deltaHp = (result["hp"] ?? 0) - api.hp
-                    await MainActor.run {
-                        self.sendNotification(title: "Pomodoro Failed!", body: "You Lost Health: \(String(format: "%.2f", deltaHp))")
-                        self.habiticaHp = result["hp"] ?? self.habiticaHp
-                    }
-                    await api.fetchUserData(settings: settings, silent: true)
+                guard let requestSettings = self.phaseRequestSettings(configuration) else { return }
+                if let id = await api.ensurePomodoroHabit(settings: requestSettings),
+                   let refreshed = self.phaseRequestSettings(configuration) {
+                    _ = await api.scoreHabit(taskId: id, direction: "down", settings: refreshed)
+                    await refreshHabitica()
                 }
             }
         }
         updateTomato()
+        notifyBadge()
     }
 
-    // MARK: - Toggle Start/Pause (快捷键 ⌘⇧P)
-    // 已暂停 → 继续；番茄进行中 → 暂停；其余情况 → 启动番茄
-    func togglePomodoro() {
-        if isFrozen {
-            unfreeze()
-        } else if isRunning && phase == .pomodoro {
-            freeze()
-        } else {
-            activate()
-        }
-        NotificationCenter.default.post(name: .badgeUpdate, object: nil)
-    }
-
-    // MARK: - Freeze / Unfreeze
     func freeze() {
+        guard isRunning, !isFrozen, phaseEndsAt != nil else { return }
+        tick(at: Date())
+        guard isRunning, phaseEndsAt != nil else { return }
+        timer?.invalidate()
+        timer = nil
+        phaseEndsAt = nil
         isFrozen = true
-        pauseTimer()
         audioManager.stopAmbient()
+        #if os(iOS)
+        cancelBackgroundEndNotification()
+        #endif
         updateTomato()
+        notifyBadge()
     }
 
     func unfreeze() {
+        guard isFrozen, let handler = endHandler else { return }
         isFrozen = false
-        startTimer(duration: timerValue, during: { [weak self] in
-            self?.duringPomodoro()
-        }, end: { [weak self] in
-            Task { await self?.pomodoroEnds() }
-        })
-        updateTomato()
+        // Preserve the handler belonging to the paused phase; a break must never complete a pomodoro.
+        beginPhase(phase, duration: timerValue, end: handler)
+        if phase == .pomodoro, let configuration = activePomodoroSettings {
+            audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
+        }
     }
 
-    // MARK: - Skip to Break
     func skipToBreak() {
         guard phase == .pomodoro else { return }
-        #if os(macOS)
-        if settings.enableBlockMode {
-            BlockProgressManager.shared.recordAbandonedPomo(settings: settings)
+        let skippedConfiguration = activePomodoroSettings ?? phaseSnapshot(settings)
+        if skippedConfiguration.enableBlockMode {
+            BlockProgressManager.shared.recordAbandonedPomo(settings: skippedConfiguration)
         }
-        #endif
+        activePomodoroSettings = nil
         audioManager.stopAmbient()
-        stopTimer()
-        #if os(macOS)
-        // 跳过不是完成：枯萎植物不计入 combo。
         pomoSetCounter = 0
-        #else
-        pomoSetCounter += 1
-        #endif
+        completedSet = false
+        customBreak = false
+        pendingBreakSeconds = skippedConfiguration.breakDuration * 60
+        activeBreakSettings = skippedConfiguration
         startBreak()
         sendNotification(title: "Time's Up", body: "Take a break")
-        isFrozen = false
-        updateTomato()
     }
 
-    // MARK: - Take Manual Break (custom duration)
+    /// Idle-only custom breaks do not fabricate a completed set or clear earned combo progress.
     func takeBreak(duration: Int) {
-        stopTimer()
-        pomoSetCounter = settings.pomoSetNum
-        isRunning = true
-        phase = .breakTime
-        startTimer(duration: duration * 60, during: { [weak self] in
-            self?.duringBreak()
-        }, end: { [weak self] in
-            self?.breakEnds()
-        })
-        updateTomato()
+        guard phase == .idle, !isRunning, !isFrozen, duration > 0 else { return }
+        #if os(iOS)
+        requestNotificationPermissionIfNeeded()
+        #endif
+        customBreak = true
+        pendingBreakSeconds = duration * 60
+        activeBreakSettings = phaseSnapshot(settings)
+        startBreak()
     }
 
-    // MARK: - Reset
     func reset() {
         audioManager.stopAmbient()
         stopTimer()
+        activePomodoroSettings = nil
+        activeBreakSettings = nil
+        activeBreakExtensionSettings = nil
         pomoSetCounter = 0
-        isFrozen = false
-        updateTomato()
+        completedSet = false
+        customBreak = false
+        pendingBreakSeconds = 0
+        notifyBadge()
     }
 
-    // MARK: - Timer core
-    private func startTimer(duration: Int, during: @escaping () -> Void, end: @escaping () -> Void) {
-        var remaining = duration
-        timerValue = remaining
-        timerString = formatTime(remaining)
-        duringHandler = during
-        endHandler = end
-        phaseEndsAt = Date().addingTimeInterval(TimeInterval(duration))
-        #if os(iOS)
-        scheduleBackgroundEndNotification(after: TimeInterval(duration))
-        #endif
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
-            guard let self = self else { t.invalidate(); return }
-            remaining -= 1
-            self.timerValue = remaining
-            self.timerString = self.formatTime(remaining)
-            during()
-            if remaining <= 0 {
-                t.invalidate()
-                self.timer = nil
-                self.phaseEndsAt = nil
-                #if os(iOS)
-                self.cancelBackgroundEndNotification()
-                #endif
-                end()
-            }
-        }
-    }
-
-    /// iOS：应用回到前台时按 phaseEndsAt 重算剩余时间。
-    /// 后台期间 Timer 被系统挂起，若不重同步，番茄会一直停在进入后台的时刻。
-    func resyncAfterForeground(chain: Int = 0) {
-        guard isRunning, !isFrozen, let endsAt = phaseEndsAt else { return }
-        let remaining = Int(ceil(endsAt.timeIntervalSince(Date())))
+    private func beginPhase(_ next: TimerPhase, duration: Int, startingAt date: Date = Date(), end: @escaping (Date) -> Void) {
         timer?.invalidate()
         timer = nil
-
-        if remaining > 0 {
-            // 阶段尚未结束：用真实剩余时间重建计时器
-            timerValue = remaining
-            timerString = formatTime(remaining)
-            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
-                guard let self = self else { t.invalidate(); return }
-                self.timerValue -= 1
-                self.timerString = self.formatTime(max(0, self.timerValue))
-                self.duringHandler?()
-                if self.timerValue <= 0 {
-                    t.invalidate()
-                    self.timer = nil
-                    self.phaseEndsAt = nil
-                    self.endHandler?()
-                }
-            }
-            return
-        }
-
-        // 后台期间阶段已结束 → 触发结束逻辑（Habitica 计分、统计、进入休息等）
-        phaseEndsAt = nil
+        phase = next
+        isRunning = true
+        isFrozen = false
+        phaseDuration = max(1, duration)
+        timerValue = phaseDuration
+        timerString = formatTime(timerValue)
+        endHandler = end
+        phaseEndsAt = date.addingTimeInterval(TimeInterval(phaseDuration))
+        lastTickAt = date
         #if os(iOS)
-        cancelBackgroundEndNotification()
+        scheduleBackgroundEndNotification(after: max(1, phaseEndsAt!.timeIntervalSinceNow))
         #endif
-        endHandler?()
-
-        // 连锁处理（如后台跨过了 番茄结束→休息结束），限制深度避免失控
-        if chain < 6 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.resyncAfterForeground(chain: chain + 1)
-            }
-        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick(at: Date()) }
+        updateTomato()
+        notifyBadge()
     }
 
-    #if os(iOS)
-    // 首次启动番茄时请求通知权限（懒加载，避免启动即弹窗）
-    private static var permissionRequested = false
-    private func requestNotificationPermissionIfNeeded() {
-        guard !Self.permissionRequested else { return }
-        Self.permissionRequested = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
-    }
-
-    // 后台/锁屏时通过本地通知告知阶段结束（Timer 挂起时用户仍能被提醒）
-    private func scheduleBackgroundEndNotification(after interval: TimeInterval) {
-        cancelBackgroundEndNotification()
-        let content = UNMutableNotificationContent()
-        switch phase {
-        case .pomodoro:
-            content.title = "Time's Up"
-            content.body = "番茄钟结束，休息一下 🍅"
-        case .breakTime, .breakExtension:
-            content.title = "Time's Up"
-            content.body = "休息结束，回到工作"
-        default:
+    private func tick(at date: Date) {
+        guard isRunning, !isFrozen, let deadline = phaseEndsAt else { return }
+        let raw = Int(ceil(deadline.timeIntervalSince(date)))
+        if (lastTickAt.map { date < $0 } ?? false) || raw > phaseDuration {
+            // Any observed wall-clock rollback rebases to the already displayed remaining time.
+            // Checking only the configured duration would still permit smaller rollbacks to add time.
+            phaseEndsAt = date.addingTimeInterval(TimeInterval(timerValue))
+            lastTickAt = date
+            #if os(iOS)
+            scheduleBackgroundEndNotification(after: TimeInterval(timerValue))
+            #endif
             return
         }
-        content.sound = .default
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, interval), repeats: false)
-        let req = UNNotificationRequest(identifier: Self.backgroundEndNotificationId, content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(req)
+        lastTickAt = date
+        timerValue = max(0, raw)
+        timerString = formatTime(timerValue)
+        if timerValue == 0 {
+            let handler = endHandler
+            timer?.invalidate()
+            timer = nil
+            phaseEndsAt = nil
+            endHandler = nil
+            #if os(iOS)
+            cancelBackgroundEndNotification()
+            #endif
+            handler?(deadline)
+        } else if phase == .pomodoro, let configuration = activePomodoroSettings {
+            audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
+        }
+        updateTomato()
+        notifyBadge()
     }
 
-    private func cancelBackgroundEndNotification() {
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.backgroundEndNotificationId])
+    /// Catch up elapsed work → break → grace phases, but never invent unattended focus sessions.
+    func resyncAfterForeground(chain: Int = 0, now: Date = Date()) {
+        for _ in 0..<6 {
+            guard isRunning, !isFrozen, let deadline = phaseEndsAt else { break }
+            tick(at: now)
+            if deadline > now { break }
+        }
+        loadTodayCount()
     }
-    #endif
 
     private func stopTimer() {
         timer?.invalidate()
         timer = nil
         phaseEndsAt = nil
-        #if os(iOS)
-        cancelBackgroundEndNotification()
-        #endif
+        endHandler = nil
+        lastTickAt = nil
         timerString = "00:00"
+        timerValue = 0
         isRunning = false
         phase = .idle
         isFrozen = false
-        updateTomato()
-    }
-
-    private func pauseTimer() {
-        timer?.invalidate()
-        timer = nil
-        phaseEndsAt = nil
         #if os(iOS)
         cancelBackgroundEndNotification()
         #endif
+        updateTomato()
     }
 
-    // MARK: - Tomato state
     private func updateTomato() {
-        if phase == .breakExtension {
-            tomatoState = .warning
-        } else if phase == .breakTime || phase == .manualBreak {
-            tomatoState = phase == .manualBreak ? .win : .breakTime
-        } else if phase == .pomodoro || phase == .idle && isRunning {
-            tomatoState = isFrozen ? .freeze : .progress
-        } else {
-            tomatoState = .wait
-        }
+        if isFrozen { tomatoState = .freeze }
+        else if phase == .breakExtension { tomatoState = .warning }
+        else if phase == .manualBreak { tomatoState = .win }
+        else if phase == .breakTime { tomatoState = .breakTime }
+        else if phase == .pomodoro { tomatoState = .progress }
+        else { tomatoState = .wait }
     }
-
-    // MARK: - Helpers
-    private func formatTime(_ seconds: Int) -> String {
-        let m = seconds / 60
-        let s = seconds % 60
-        return String(format: "%02d:%02d", m, s)
-    }
-
+    private func formatTime(_ seconds: Int) -> String { String(format: "%02d:%02d", max(0, seconds) / 60, max(0, seconds) % 60) }
+    private func notifyBadge() { NotificationCenter.default.post(name: .badgeUpdate, object: nil) }
     private func sendNotification(title: String, body: String) {
         lastNotification = "\(title): \(body)"
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
-    // MARK: - Init Habitica tasks
+    private func accountSignature(_ settings: UserSettings) -> String {
+        "\(api.cloudAccount(settings: settings) ?? "")|\(settings.customPomodoroTask)|\(settings.pomodoroTaskId ?? "")|\(settings.customSetTask)|\(settings.pomodoroSetTaskId ?? "")"
+    }
+
+    /// Business snapshots retain connection intent and owner/IDs, never credentials.
+    private func phaseSnapshot(_ configuration: UserSettings) -> UserSettings {
+        var snapshot = configuration
+        snapshot.apiToken = ""
+        return snapshot
+    }
+
+    /// Both captured and current connection intent must allow the same UID/API owner's current key.
+    private func phaseRequestSettings(_ phaseSettings: UserSettings) -> UserSettings? {
+        let current = settings
+        guard phaseSettings.connectHabitica, current.connectHabitica, !current.apiToken.isEmpty,
+              let owner = api.cloudAccount(settings: phaseSettings), owner == api.cloudAccount(settings: current) else { return nil }
+        var request = phaseSettings
+        request.apiToken = current.apiToken
+        request.developerServerUrl = current.developerServerUrl
+        return request
+    }
     func initHabiticaTasks() async {
-        guard settings.connectHabitica else { return }
-        await api.fetchUserData(settings: settings)
-        pomodoroTaskId = await api.ensurePomodoroHabit(settings: settings)
-        pomodoroSetTaskId = await api.ensurePomodoroSetHabit(settings: settings)
+        let configuration = settings
+        let signature = accountSignature(configuration)
+        guard configuration.connectHabitica, !configuration.uid.isEmpty, !configuration.apiToken.isEmpty else {
+            await MainActor.run { self.habiticaConnected = false }
+            return
+        }
+        await api.fetchUserData(settings: configuration)
+        let pomo = await api.ensurePomodoroHabit(settings: configuration)
+        let combo = await api.ensurePomodoroSetHabit(settings: configuration)
         await MainActor.run {
-            self.habiticaMonies = api.monies
-            self.habiticaExp = api.exp
-            self.habiticaHp = api.hp
-            self.habiticaConnected = api.isAuthenticated
+            guard self.accountSignature(self.settings) == signature else { return }
+            self.pomodoroTaskId = pomo
+            self.pomodoroSetTaskId = combo
+            self.taskAccountSignature = signature
+            self.updateHabiticaState()
         }
     }
-
     func refreshHabitica() async {
-        await api.fetchUserData(settings: settings)
+        let configuration = settings
+        let signature = accountSignature(configuration)
+        await api.fetchUserData(settings: configuration)
         await MainActor.run {
-            self.habiticaMonies = api.monies
-            self.habiticaExp = api.exp
-            self.habiticaHp = api.hp
-            self.habiticaConnected = api.isAuthenticated
+            guard self.accountSignature(self.settings) == signature else { return }
+            self.updateHabiticaState()
         }
     }
-
-    func loadTodayCount() {
-        todayPomodoros = histogramManager.getToday()?.pomodoros ?? 0
+    private func updateHabiticaState() {
+        habiticaMonies = api.monies
+        habiticaExp = api.exp
+        habiticaHp = api.hp
+        habiticaConnected = api.isAuthenticated
     }
+    func loadTodayCount() { todayPomodoros = histogramManager.getToday()?.pomodoros ?? 0 }
+
+    #if os(iOS)
+    private static var permissionRequested = false
+    private func requestNotificationPermissionIfNeeded() {
+        guard !Self.permissionRequested else { return }
+        Self.permissionRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            if granted {
+                DispatchQueue.main.async {
+                    BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+                }
+            }
+        }
+    }
+    private func scheduleBackgroundEndNotification(after interval: TimeInterval) {
+        cancelBackgroundEndNotification()
+        let content = UNMutableNotificationContent()
+        content.title = "Time's Up"
+        content.body = phase == .pomodoro ? "番茄钟结束，休息一下 🍅" : "休息结束，回到工作"
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, interval), repeats: false)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: Self.backgroundEndNotificationId, content: content, trigger: trigger))
+    }
+    private func cancelBackgroundEndNotification() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.backgroundEndNotificationId])
+    }
+    #endif
 }
