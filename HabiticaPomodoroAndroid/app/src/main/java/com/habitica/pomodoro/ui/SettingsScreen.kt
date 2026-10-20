@@ -63,10 +63,16 @@ fun SettingsScreen(
     var serverDraft by remember(s.developerServerUrl) { mutableStateOf(s.developerServerUrl) }
     var confirmServer by remember { mutableStateOf(false) }
     var serverError by remember { mutableStateOf<String?>(null) }
+    var confirmMarkerCleanup by remember { mutableStateOf(false) }
     if (confirmServer) AlertDialog(onDismissRequest = { confirmServer = false }, title = { Text("确认自定义 API 服务") },
         text = { Text("User ID 和 API Token 会发送给此 HTTPS 服务器。仅使用你控制或信任的服务；HTTPS 不代表服务可信。不跟随重定向，也不接受 HTTP 地址。") },
         confirmButton = { TextButton(onClick = { vm.updateSettings { it.copy(developerServerUrl = serverDraft.trim()) }; confirmServer = false }) { Text("确认使用") } },
         dismissButton = { TextButton(onClick = { confirmServer = false }) { Text("取消") } })
+    if (confirmMarkerCleanup) AlertDialog(onDismissRequest = { confirmMarkerCleanup = false }, title = { Text("清理隔离中的创建标记") },
+        text = { Text("将清空当前账号的 ${state.store.deletedCreateMarkers.size} 个待处理创建标记与 ${state.store.deletedCloudIdMarkers.size} 个远端 ID 关联，之后同签名的云端任务会恢复正常合并。" +
+                "删除队列（${state.store.deletedCloudIds.size}）与已删除任务的原始关联不会改动，其他账号分区不受影响。仅当你确认云端没有仍需核对的同签名任务时继续。") },
+        confirmButton = { TextButton(onClick = { vm.clearQuarantinedCreateMarkers(); confirmMarkerCleanup = false }) { Text("确认清理") } },
+        dismissButton = { TextButton(onClick = { confirmMarkerCleanup = false }) { Text("取消") } })
 
     Column(
         modifier = modifier
@@ -229,9 +235,39 @@ fun SettingsScreen(
                 { v -> vm.updateSettings { it.copy(pomoEndSound = v) } }, { v -> vm.updateSettings { it.copy(pomoEndSoundVolume = v) } }) { preview.effect(s.pomoEndSound, s.pomoEndSoundVolume, true) }
             SoundSetting("休息结束音", s.breakEndSound, s.breakEndSoundVolume, PomoAudio.soundOptions,
                 { v -> vm.updateSettings { it.copy(breakEndSound = v) } }, { v -> vm.updateSettings { it.copy(breakEndSoundVolume = v) } }) { preview.effect(s.breakEndSound, s.breakEndSoundVolume, true) }
-            SoundSetting("环境音", s.ambientSound, s.ambientSoundVolume, PomoAudio.ambientOptions,
-                { v -> vm.updateSettings { it.copy(ambientSound = v) } }, { v -> vm.updateSettings { it.copy(ambientSoundVolume = v) } }) { preview.previewAmbient(s.ambientSound, s.ambientSoundVolume) }
-            TextButton(onClick = { preview.stopAll(); vm.refreshRuntimeAudio() }) { Text("停止预听") }
+            // 环境音来源（与 Apple 端 ambientSource 一致）：自定义单轨 / 栖时随机场景混音
+            Text("环境音来源", style = MaterialTheme.typography.bodyLarge)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    selected = s.ambientSource != "qishi",
+                    onClick = { vm.updateSettings { it.copy(ambientSource = "custom") } },
+                ) { Text("自定义") }
+                SegmentedButton(
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    selected = s.ambientSource == "qishi",
+                    onClick = { vm.updateSettings { it.copy(ambientSource = "qishi") } },
+                ) { Text("栖时随机") }
+            }
+            if (s.ambientSource == "qishi") {
+                Text(
+                    text = "每个番茄随机播放一个栖时场景混音（共 ${vm.qishiSceneCount()} 个场景，需联网流式播放）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("音量 ${(s.ambientSoundVolume * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                Slider(s.ambientSoundVolume.toFloat(), onValueChange = { v -> vm.updateSettings { it.copy(ambientSoundVolume = v.toDouble()) } })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        vm.randomQishiPreviewScene()?.let { preset -> preview.playQishiScene(preset, s.ambientSoundVolume) }
+                    }) { Text("试听随机场景") }
+                    TextButton(onClick = { preview.stopQishi(); vm.refreshRuntimeAudio() }) { Text("停止试听") }
+                }
+            } else {
+                SoundSetting("环境音", s.ambientSound, s.ambientSoundVolume, PomoAudio.ambientOptions,
+                    { v -> vm.updateSettings { it.copy(ambientSound = v) } }, { v -> vm.updateSettings { it.copy(ambientSoundVolume = v) } }) { preview.previewAmbient(s.ambientSound, s.ambientSoundVolume) }
+                TextButton(onClick = { preview.stopAll(); vm.refreshRuntimeAudio() }) { Text("停止预听") }
+            }
             Text("预听最多 8 秒。环境音仅专注时循环，暂停/休息/放弃会停止。系统通知是否显示受通知权限和渠道设置控制。", style = MaterialTheme.typography.bodySmall)
         }
 
@@ -258,6 +294,30 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            HorizontalDivider()
+            Text(
+                text = "Top3 同步队列",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "待处理创建标记：${state.store.deletedCreateMarkers.size} · 删除队列：${state.store.deletedCloudIds.size}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "创建标记用于隔离结果不明的云端创建请求；历史版本遗留的孤儿标记无法自动核对时，可在确认后手动清理。" +
+                    "清理不会改动你的显式删除记录（删除队列），也不影响其他账号分区。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { confirmMarkerCleanup = true }) { Text("清理隔离中的创建标记") }
+            state.persistenceError?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
 
         // MARK: 关于

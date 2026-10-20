@@ -1,0 +1,1391 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "autumn-leaf-rain",
+   "name": "落叶听雨",
+   "subtitle": "秋叶密雨 · 林地溪雨 · 枯苇轻风",
+   "tracks": [
+    {
+     "id": "fallen-leaf-rain",
+     "file": "fallen-leaf-rain.mp3",
+     "volume": 52
+    },
+    {
+     "id": "woodland-floor-rain",
+     "file": "woodland-floor-rain.mp3",
+     "volume": 34
+    },
+    {
+     "id": "dry-reed-breeze",
+     "file": "dry-reed-breeze.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "winter-birdsong",
+   "name": "冬林晨鸣",
+   "subtitle": "蓝山雀轻唱 · 冬林喜鹊 · 松林劲风",
+   "tracks": [
+    {
+     "id": "blue-tit",
+     "file": "blue-tit.mp3",
+     "volume": 45
+    },
+    {
+     "id": "winter-magpie",
+     "file": "winter-magpie.mp3",
+     "volume": 30
+    },
+    {
+     "id": "pine-wind",
+     "file": "pine-wind.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "river-and-falls",
+   "name": "河瀑之间",
+   "subtitle": "林谷瀑声 · 河湾急流",
+   "tracks": [
+    {
+     "id": "ostrova-waterfall",
+     "file": "ostrova-waterfall.mp3",
+     "volume": 50
+    },
+    {
+     "id": "esperaza-river",
+     "file": "esperaza-river.mp3",
+     "volume": 28
+    }
+   ]
+  },
+  {
+   "id": "autumn-harbor",
+   "name": "秋岸慢听",
+   "subtitle": "港湾轻浪 · 秋岸群鸟",
+   "tracks": [
+    {
+     "id": "cornwall-lapping",
+     "file": "cornwall-lapping.mp3",
+     "volume": 56
+    },
+    {
+     "id": "autumn-shore-birds",
+     "file": "autumn-shore-birds.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "north-sea-seal",
+   "name": "北海潮语",
+   "subtitle": "北海海豹 · 港湾轻浪",
+   "tracks": [
+    {
+     "id": "grey-seal",
+     "file": "grey-seal.mp3",
+     "volume": 28
+    },
+    {
+     "id": "cornwall-lapping",
+     "file": "cornwall-lapping.mp3",
+     "volume": 52
+    }
+   ]
+  },
+  {
+   "id": "wild-night-howls",
+   "name": "荒野夜息",
+   "subtitle": "郊狼夜歌 · 山间蟋蟀 · 枯苇轻风",
+   "tracks": [
+    {
+     "id": "coyote-night",
+     "file": "coyote-night.mp3",
+     "volume": 24
+    },
+    {
+     "id": "cricket",
+     "file": "cricket.mp3",
+     "volume": 28
+    },
+    {
+     "id": "dry-reed-breeze",
+     "file": "dry-reed-breeze.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "hail-fireside",
+   "name": "雹雨炉边",
+   "subtitle": "雹雨远雷 · 壁炉火苗",
+   "tracks": [
+    {
+     "id": "hail-thunder",
+     "file": "hail-thunder.mp3",
+     "volume": 32
+    },
+    {
+     "id": "fireplace",
+     "file": "fireplace.mp3",
+     "volume": 44
+    }
+   ]
+  },
+  {
+   "id": "temple-rain",
+   "name": "禅院听雨",
+   "subtitle": "灵隐寺诵声 · 叶下雨滴",
+   "tracks": [
+    {
+     "id": "lingyin-temple-chant",
+     "file": "lingyin-temple-chant.mp3",
+     "volume": 48
+    },
+    {
+     "id": "rain-under-leaves",
+     "file": "rain-under-leaves.mp3",
+     "volume": 32
+    }
+   ]
+  },
+  {
+   "id": "sutra-stream",
+   "name": "心经溪畔",
+   "subtitle": "心经念诵 · 浅溪",
+   "tracks": [
+    {
+     "id": "heart-sutra-mandarin",
+     "file": "heart-sutra-mandarin.mp3",
+     "volume": 55
+    },
+    {
+     "id": "stream",
+     "file": "stream.mp3",
+     "volume": 25
+    }
+   ]
+  },
+  {
+   "id": "om-forest",
+   "name": "Om 林间",
+   "subtitle": "Om 吟声 · 白杨晨风 · 山泉溪流",
+   "tracks": [
+    {
+     "id": "om-vocal-texture",
+     "file": "om-vocal-texture.mp3",
+     "volume": 42
+    },
+    {
+     "id": "aspen-dawn-wind",
+     "file": "aspen-dawn-wind.mp3",
+     "volume": 24
+    },
+    {
+     "id": "mountain-spring-creek",
+     "file": "mountain-spring-creek.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "forest",
+   "name": "雨后林间",
+   "subtitle": "细雨 · 夜莺 · 乌鸫",
+   "tracks": [
+    {
+     "id": "light-rain",
+     "file": "light-rain.mp3",
+     "volume": 58
+    },
+    {
+     "id": "nightingale",
+     "file": "nightingale.mp3",
+     "volume": 49
+    },
+    {
+     "id": "blackbird",
+     "file": "blackbird.mp3",
+     "volume": 35
+    }
+   ]
+  },
+  {
+   "id": "window",
+   "name": "窗边慢听",
+   "subtitle": "窗边雨 · 屋檐雨",
+   "tracks": [
+    {
+     "id": "window-rain",
+     "file": "window-rain.mp3",
+     "volume": 70
+    },
+    {
+     "id": "roof-rain",
+     "file": "roof-rain.mp3",
+     "volume": 32
+    }
+   ]
+  },
+  {
+   "id": "morning",
+   "name": "晨光初醒",
+   "subtitle": "晨间群鸟 · 乌鸫 · 细雨",
+   "tracks": [
+    {
+     "id": "dawn-chorus",
+     "file": "dawn-chorus.mp3",
+     "volume": 56
+    },
+    {
+     "id": "blackbird",
+     "file": "blackbird.mp3",
+     "volume": 35
+    },
+    {
+     "id": "light-rain",
+     "file": "light-rain.mp3",
+     "volume": 22
+    }
+   ]
+  },
+  {
+   "id": "lakeside",
+   "name": "湖畔微风",
+   "subtitle": "湖岸波浪 · 松林劲风",
+   "tracks": [
+    {
+     "id": "lake-waves",
+     "file": "lake-waves.mp3",
+     "volume": 67
+    },
+    {
+     "id": "pine-wind",
+     "file": "pine-wind.mp3",
+     "volume": 27
+    }
+   ]
+  },
+  {
+   "id": "summer-night",
+   "name": "夏夜山居",
+   "subtitle": "山间蟋蟀 · 浅溪 · 蝉鸣",
+   "tracks": [
+    {
+     "id": "cricket",
+     "file": "cricket.mp3",
+     "volume": 49
+    },
+    {
+     "id": "stream",
+     "file": "stream.mp3",
+     "volume": 61
+    },
+    {
+     "id": "cicada",
+     "file": "cicada.mp3",
+     "volume": 22
+    }
+   ]
+  },
+  {
+   "id": "fireside",
+   "name": "雨夜炉边",
+   "subtitle": "壁炉火苗 · 窗边雨",
+   "tracks": [
+    {
+     "id": "fireplace",
+     "file": "fireplace.mp3",
+     "volume": 58
+    },
+    {
+     "id": "window-rain",
+     "file": "window-rain.mp3",
+     "volume": 42
+    }
+   ]
+  },
+  {
+   "id": "alpha-lake",
+   "name": "湖边静听",
+   "subtitle": "α 节拍 · 湖岸波浪 · 松林劲风",
+   "tracks": [
+    {
+     "id": "alpha-beat",
+     "file": "alpha-beat.mp3",
+     "volume": 38
+    },
+    {
+     "id": "lake-waves",
+     "file": "lake-waves.mp3",
+     "volume": 62
+    },
+    {
+     "id": "pine-wind",
+     "file": "pine-wind.mp3",
+     "volume": 23
+    }
+   ]
+  },
+  {
+   "id": "theta-night",
+   "name": "夜色渐深",
+   "subtitle": "θ 节拍 · 山间蟋蟀 · 粉红噪声",
+   "tracks": [
+    {
+     "id": "theta-beat",
+     "file": "theta-beat.mp3",
+     "volume": 35
+    },
+    {
+     "id": "cricket",
+     "file": "cricket.mp3",
+     "volume": 43
+    },
+    {
+     "id": "pink-noise",
+     "file": "pink-noise.mp3",
+     "volume": 29
+    }
+   ]
+  },
+  {
+   "id": "low-rain",
+   "name": "低频雨幕",
+   "subtitle": "棕色噪声 · 窗边雨 · 浅溪",
+   "tracks": [
+    {
+     "id": "brown-noise",
+     "file": "brown-noise.mp3",
+     "volume": 40
+    },
+    {
+     "id": "window-rain",
+     "file": "window-rain.mp3",
+     "volume": 54
+    },
+    {
+     "id": "stream",
+     "file": "stream.mp3",
+     "volume": 32
+    }
+   ]
+  },
+  {
+   "id": "desk-beta",
+   "name": "案头底色",
+   "subtitle": "β 节拍 · 细雨 · 棕色噪声",
+   "tracks": [
+    {
+     "id": "beta-beat",
+     "file": "beta-beat.mp3",
+     "volume": 30
+    },
+    {
+     "id": "light-rain",
+     "file": "light-rain.mp3",
+     "volume": 46
+    },
+    {
+     "id": "brown-noise",
+     "file": "brown-noise.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "gamma-mist",
+   "name": "高频薄雾",
+   "subtitle": "γ 节拍 · 灰噪声 · 白杨晨风",
+   "tracks": [
+    {
+     "id": "gamma-beat",
+     "file": "gamma-beat.mp3",
+     "volume": 26
+    },
+    {
+     "id": "gray-noise",
+     "file": "gray-noise.mp3",
+     "volume": 24
+    },
+    {
+     "id": "aspen-dawn-wind",
+     "file": "aspen-dawn-wind.mp3",
+     "volume": 40
+    }
+   ]
+  },
+  {
+   "id": "velvet-night",
+   "name": "丝绒夜幔",
+   "subtitle": "丝绒噪声 · 山间蟋蟀 · 窗边雨",
+   "tracks": [
+    {
+     "id": "velvet-noise",
+     "file": "velvet-noise.mp3",
+     "volume": 34
+    },
+    {
+     "id": "cricket",
+     "file": "cricket.mp3",
+     "volume": 30
+    },
+    {
+     "id": "window-rain",
+     "file": "window-rain.mp3",
+     "volume": 46
+    }
+   ]
+  },
+  {
+   "id": "blue-cove",
+   "name": "蓝调海隈",
+   "subtitle": "蓝噪声 · 港湾轻浪",
+   "tracks": [
+    {
+     "id": "blue-noise",
+     "file": "blue-noise.mp3",
+     "volume": 24
+    },
+    {
+     "id": "cornwall-lapping",
+     "file": "cornwall-lapping.mp3",
+     "volume": 56
+    }
+   ]
+  },
+  {
+   "id": "bowl-stillness",
+   "name": "静坐钵音",
+   "subtitle": "颂钵磨音 · 深音持续垫",
+   "tracks": [
+    {
+     "id": "singing-bowl-rim",
+     "file": "singing-bowl-rim.mp3",
+     "volume": 46
+    },
+    {
+     "id": "deep-drone",
+     "file": "deep-drone.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "temple-still",
+   "name": "古寺一钟",
+   "subtitle": "古寺铜钟 · 暖音持续垫",
+   "tracks": [
+    {
+     "id": "temple-bell",
+     "file": "temple-bell.mp3",
+     "volume": 42
+    },
+    {
+     "id": "warm-drone",
+     "file": "warm-drone.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "cave-hermit",
+   "name": "石窟入定",
+   "subtitle": "洞穴喉音 · 洞穴深处 · 低频嗡鸣",
+   "tracks": [
+    {
+     "id": "cave-throat-singing",
+     "file": "cave-throat-singing.mp3",
+     "volume": 32
+    },
+    {
+     "id": "deep-cave",
+     "file": "deep-cave.mp3",
+     "volume": 46
+    },
+    {
+     "id": "sub-hum",
+     "file": "sub-hum.mp3",
+     "volume": 16
+    }
+   ]
+  },
+  {
+   "id": "deep-thought",
+   "name": "深思底层",
+   "subtitle": "低频嗡鸣 · 丝绒噪声 · 颂钵单击",
+   "tracks": [
+    {
+     "id": "sub-hum",
+     "file": "sub-hum.mp3",
+     "volume": 30
+    },
+    {
+     "id": "velvet-noise",
+     "file": "velvet-noise.mp3",
+     "volume": 18
+    },
+    {
+     "id": "singing-bowl-strike",
+     "file": "singing-bowl-strike.mp3",
+     "volume": 26
+    }
+   ]
+  },
+  {
+   "id": "night-heart",
+   "name": "夜色安心",
+   "subtitle": "缓慢心跳 · 窗边雨 · 暖音持续垫",
+   "tracks": [
+    {
+     "id": "slow-heartbeat",
+     "file": "slow-heartbeat.mp3",
+     "volume": 36
+    },
+    {
+     "id": "window-rain",
+     "file": "window-rain.mp3",
+     "volume": 44
+    },
+    {
+     "id": "warm-drone",
+     "file": "warm-drone.mp3",
+     "volume": 14
+    }
+   ]
+  },
+  {
+   "id": "garden-rain",
+   "name": "叶上初雨",
+   "subtitle": "庭院叶雨 · 乌鸫",
+   "tracks": [
+    {
+     "id": "rain-leaves-garden",
+     "file": "rain-leaves-garden.mp3",
+     "volume": 68
+    },
+    {
+     "id": "blackbird",
+     "file": "blackbird.mp3",
+     "volume": 28
+    }
+   ]
+  },
+  {
+   "id": "under-leaves",
+   "name": "叶下片刻",
+   "subtitle": "叶下雨滴 · 近听叶雨",
+   "tracks": [
+    {
+     "id": "rain-under-leaves",
+     "file": "rain-under-leaves.mp3",
+     "volume": 62
+    },
+    {
+     "id": "rain-leaves-close",
+     "file": "rain-leaves-close.mp3",
+     "volume": 31
+    }
+   ]
+  },
+  {
+   "id": "forest-leaves",
+   "name": "林叶听雨",
+   "subtitle": "林中叶雨 · 松林劲风",
+   "tracks": [
+    {
+     "id": "rain-forest-birds",
+     "file": "rain-forest-birds.mp3",
+     "volume": 65
+    },
+    {
+     "id": "pine-wind",
+     "file": "pine-wind.mp3",
+     "volume": 22
+    }
+   ]
+  },
+  {
+   "id": "tent-night",
+   "name": "帐篷雨夜",
+   "subtitle": "帐篷雨 · 夜林猫头鹰",
+   "tracks": [
+    {
+     "id": "tent-rain",
+     "file": "tent-rain.mp3",
+     "volume": 64
+    },
+    {
+     "id": "owl",
+     "file": "owl.mp3",
+     "volume": 31
+    }
+   ]
+  },
+  {
+   "id": "pebble-coast",
+   "name": "海岸轻息",
+   "subtitle": "卵石海浪 · 草丛微风",
+   "tracks": [
+    {
+     "id": "pebble-waves",
+     "file": "pebble-waves.mp3",
+     "volume": 67
+    },
+    {
+     "id": "grass-wind",
+     "file": "grass-wind.mp3",
+     "volume": 28
+    }
+   ]
+  },
+  {
+   "id": "waterfall-morning",
+   "name": "山涧晨光",
+   "subtitle": "岩间小瀑布 · 啄木鸟",
+   "tracks": [
+    {
+     "id": "small-waterfall",
+     "file": "small-waterfall.mp3",
+     "volume": 62
+    },
+    {
+     "id": "woodpecker",
+     "file": "woodpecker.mp3",
+     "volume": 35
+    }
+   ]
+  },
+  {
+   "id": "flower-tree",
+   "name": "春风花树",
+   "subtitle": "花树蜂群 · 风过树叶",
+   "tracks": [
+    {
+     "id": "bees-blossoms",
+     "file": "bees-blossoms.mp3",
+     "volume": 42
+    },
+    {
+     "id": "leaf-wind",
+     "file": "leaf-wind.mp3",
+     "volume": 52
+    }
+   ]
+  },
+  {
+   "id": "reed-insects",
+   "name": "苇塘虫语",
+   "subtitle": "苇塘春风 · 夜间螽斯",
+   "tracks": [
+    {
+     "id": "reed-pond-wind",
+     "file": "reed-pond-wind.mp3",
+     "volume": 58
+    },
+    {
+     "id": "katydid-night",
+     "file": "katydid-night.mp3",
+     "volume": 38
+    }
+   ]
+  },
+  {
+   "id": "stove-rain",
+   "name": "炉火听雨",
+   "subtitle": "木柴滋响 · 巴西午后雨",
+   "tracks": [
+    {
+     "id": "wood-stove-sizzle",
+     "file": "wood-stove-sizzle.mp3",
+     "volume": 48
+    },
+    {
+     "id": "brazil-rain",
+     "file": "brazil-rain.mp3",
+     "volume": 58
+    }
+   ]
+  },
+  {
+   "id": "bamboo-pond",
+   "name": "竹风蛙语",
+   "subtitle": "竹林吱响 · 夜塘树蛙",
+   "tracks": [
+    {
+     "id": "bamboo-wind",
+     "file": "bamboo-wind.mp3",
+     "volume": 50
+    },
+    {
+     "id": "tree-frog-pond",
+     "file": "tree-frog-pond.mp3",
+     "volume": 37
+    }
+   ]
+  },
+  {
+   "id": "cave-stillness",
+   "name": "洞中片刻",
+   "subtitle": "洞穴水滴 · 棕色噪声",
+   "tracks": [
+    {
+     "id": "cave-drops",
+     "file": "cave-drops.mp3",
+     "volume": 64
+    },
+    {
+     "id": "brown-noise",
+     "file": "brown-noise.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "pond-after-rain",
+   "name": "雨后池畔",
+   "subtitle": "林塘群蛙 · 喷泉细流 · 庭院叶雨",
+   "tracks": [
+    {
+     "id": "forest-frogs",
+     "file": "forest-frogs.mp3",
+     "volume": 33
+    },
+    {
+     "id": "fountain",
+     "file": "fountain.mp3",
+     "volume": 51
+    },
+    {
+     "id": "rain-leaves-garden",
+     "file": "rain-leaves-garden.mp3",
+     "volume": 35
+    }
+   ]
+  },
+  {
+   "id": "chime-courtyard",
+   "name": "铃声小院",
+   "subtitle": "庭院竹铃 · 林鸽轻咕 · 庭院叶雨",
+   "tracks": [
+    {
+     "id": "bamboo-chimes",
+     "file": "bamboo-chimes.mp3",
+     "volume": 40
+    },
+    {
+     "id": "wood-pigeon",
+     "file": "wood-pigeon.mp3",
+     "volume": 30
+    },
+    {
+     "id": "rain-leaves-garden",
+     "file": "rain-leaves-garden.mp3",
+     "volume": 38
+    }
+   ]
+  },
+  {
+   "id": "storm-shelter",
+   "name": "风暴将至",
+   "subtitle": "远方滚雷 · 车内雨幕",
+   "tracks": [
+    {
+     "id": "distant-thunder",
+     "file": "distant-thunder.mp3",
+     "volume": 34
+    },
+    {
+     "id": "car-rain",
+     "file": "car-rain.mp3",
+     "volume": 61
+    }
+   ]
+  },
+  {
+   "id": "underwater-space",
+   "name": "水下漫游",
+   "subtitle": "水下河流 · 棕色噪声",
+   "tracks": [
+    {
+     "id": "underwater-river",
+     "file": "underwater-river.mp3",
+     "volume": 58
+    },
+    {
+     "id": "brown-noise",
+     "file": "brown-noise.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "umbrella-corner",
+   "name": "伞下片刻",
+   "subtitle": "伞面听雨 · 夏林柔雨",
+   "tracks": [
+    {
+     "id": "umbrella-rain",
+     "file": "umbrella-rain.mp3",
+     "volume": 58
+    },
+    {
+     "id": "soft-leaf-rain",
+     "file": "soft-leaf-rain.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "snowy-fireside",
+   "name": "雪日炉边",
+   "subtitle": "冬日风雪 · 壁炉火苗",
+   "tracks": [
+    {
+     "id": "winter-snowstorm",
+     "file": "winter-snowstorm.mp3",
+     "volume": 43
+    },
+    {
+     "id": "fireplace",
+     "file": "fireplace.mp3",
+     "volume": 53
+    }
+   ]
+  },
+  {
+   "id": "jungle-after-rain",
+   "name": "雨后林谷",
+   "subtitle": "丛林夜语 · 雨后蛙乡",
+   "tracks": [
+    {
+     "id": "jungle-night",
+     "file": "jungle-night.mp3",
+     "volume": 48
+    },
+    {
+     "id": "rain-village-frogs",
+     "file": "rain-village-frogs.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "greenhouse-afternoon",
+   "name": "温室午后",
+   "subtitle": "温室听雨 · 陶瓷风铃",
+   "tracks": [
+    {
+     "id": "greenhouse-rain",
+     "file": "greenhouse-rain.mp3",
+     "volume": 60
+    },
+    {
+     "id": "ceramic-chimes",
+     "file": "ceramic-chimes.mp3",
+     "volume": 28
+    }
+   ]
+  },
+  {
+   "id": "spring-and-skylark",
+   "name": "泉边云雀",
+   "subtitle": "地热泉泡 · 云雀长歌",
+   "tracks": [
+    {
+     "id": "geothermal-bubbles",
+     "file": "geothermal-bubbles.mp3",
+     "volume": 52
+    },
+    {
+     "id": "skylark-song",
+     "file": "skylark-song.mp3",
+     "volume": 35
+    }
+   ]
+  },
+  {
+   "id": "island-after-rain",
+   "name": "海岛雨后",
+   "subtitle": "海岛蛙鸣 · 草间雨溅",
+   "tracks": [
+    {
+     "id": "coqui-after-rain",
+     "file": "coqui-after-rain.mp3",
+     "volume": 34
+    },
+    {
+     "id": "rain-grass-splashes",
+     "file": "rain-grass-splashes.mp3",
+     "volume": 53
+    }
+   ]
+  },
+  {
+   "id": "sea-cave-return",
+   "name": "海洞回潮",
+   "subtitle": "海洞潮声 · 岩湾回潮",
+   "tracks": [
+    {
+     "id": "sea-cave-wash",
+     "file": "sea-cave-wash.mp3",
+     "volume": 56
+    },
+    {
+     "id": "sheltered-cove",
+     "file": "sheltered-cove.mp3",
+     "volume": 32
+    }
+   ]
+  },
+  {
+   "id": "wild-forest-morning",
+   "name": "林野晨歌",
+   "subtitle": "白杨晨风 · 歌鸫清唱 · 鹪鹩啼啭",
+   "tracks": [
+    {
+     "id": "aspen-dawn-wind",
+     "file": "aspen-dawn-wind.mp3",
+     "volume": 45
+    },
+    {
+     "id": "song-thrush",
+     "file": "song-thrush.mp3",
+     "volume": 36
+    },
+    {
+     "id": "wren-trills",
+     "file": "wren-trills.mp3",
+     "volume": 25
+    }
+   ]
+  },
+  {
+   "id": "wetland-dusk",
+   "name": "暮色湿地",
+   "subtitle": "暮色蛙虫 · 山泉溪流",
+   "tracks": [
+    {
+     "id": "evening-frog-crickets",
+     "file": "evening-frog-crickets.mp3",
+     "volume": 36
+    },
+    {
+     "id": "mountain-spring-creek",
+     "file": "mountain-spring-creek.mp3",
+     "volume": 48
+    }
+   ]
+  },
+  {
+   "id": "ice-lake-stillness",
+   "name": "冰湖静听",
+   "subtitle": "湖面融冰 · 白杨晨风",
+   "tracks": [
+    {
+     "id": "melting-lake-ice",
+     "file": "melting-lake-ice.mp3",
+     "volume": 45
+    },
+    {
+     "id": "aspen-dawn-wind",
+     "file": "aspen-dawn-wind.mp3",
+     "volume": 22
+    }
+   ]
+  },
+  {
+   "id": "tin-roof-thunder",
+   "name": "铁皮屋雷雨",
+   "subtitle": "铁皮屋雨 · 夏日骤雨 · 破晓雷声",
+   "tracks": [
+    {
+     "id": "metal-roof-rain",
+     "file": "metal-roof-rain.mp3",
+     "volume": 52
+    },
+    {
+     "id": "heavy-rain",
+     "file": "heavy-rain.mp3",
+     "volume": 40
+    },
+    {
+     "id": "dawn-thunder",
+     "file": "dawn-thunder.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "tropical-canopy",
+   "name": "热带园叶雨",
+   "subtitle": "热带公园叶雨 · 落木叶雨 · 棕榈树风",
+   "tracks": [
+    {
+     "id": "park-leaf-rain",
+     "file": "park-leaf-rain.mp3",
+     "volume": 55
+    },
+    {
+     "id": "rain-large-leaves",
+     "file": "rain-large-leaves.mp3",
+     "volume": 38
+    },
+    {
+     "id": "palm-wind",
+     "file": "palm-wind.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "canopy-rain-birds",
+   "name": "树冠雨与鸟",
+   "subtitle": "夏日树冠 · 高树密雨 · 林地群鸟",
+   "tracks": [
+    {
+     "id": "rain-sycamore-canopy",
+     "file": "rain-sycamore-canopy.mp3",
+     "volume": 58
+    },
+    {
+     "id": "tall-tree-rain",
+     "file": "tall-tree-rain.mp3",
+     "volume": 32
+    },
+    {
+     "id": "woodland-chorus",
+     "file": "woodland-chorus.mp3",
+     "volume": 22
+    }
+   ]
+  },
+  {
+   "id": "dawn-lakeshore",
+   "name": "湖岸晨唱",
+   "subtitle": "水边潜鸟 · 咕噜小溪 · 知更鸟晨歌",
+   "tracks": [
+    {
+     "id": "waterside-loon",
+     "file": "waterside-loon.mp3",
+     "volume": 38
+    },
+    {
+     "id": "bubbling-brook",
+     "file": "bubbling-brook.mp3",
+     "volume": 44
+    },
+    {
+     "id": "robin-song",
+     "file": "robin-song.mp3",
+     "volume": 24
+    }
+   ]
+  },
+  {
+   "id": "surf-gulls",
+   "name": "潮声与鸥",
+   "subtitle": "海岸潮声 · 海鸥群鸣",
+   "tracks": [
+    {
+     "id": "ocean-surf",
+     "file": "ocean-surf.mp3",
+     "volume": 60
+    },
+    {
+     "id": "seagull-flock",
+     "file": "seagull-flock.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "dolphin-cove",
+   "name": "海豚海湾",
+   "subtitle": "海豚声语 · 岩湾回潮",
+   "tracks": [
+    {
+     "id": "caribbean-dolphins",
+     "file": "caribbean-dolphins.mp3",
+     "volume": 36
+    },
+    {
+     "id": "sheltered-cove",
+     "file": "sheltered-cove.mp3",
+     "volume": 44
+    }
+   ]
+  },
+  {
+   "id": "cuckoo-forest",
+   "name": "林深杜鹃",
+   "subtitle": "杜鹃 · 静谧林雨 · 林下叶滴",
+   "tracks": [
+    {
+     "id": "cuckoo",
+     "file": "cuckoo.mp3",
+     "volume": 34
+    },
+    {
+     "id": "rain-quiet-forest",
+     "file": "rain-quiet-forest.mp3",
+     "volume": 50
+    },
+    {
+     "id": "understory-rain",
+     "file": "understory-rain.mp3",
+     "volume": 26
+    }
+   ]
+  },
+  {
+   "id": "willow-birdsong",
+   "name": "柳风雀语",
+   "subtitle": "山雀柳风 · 燕雀独唱 · 草地蚱蜢",
+   "tracks": [
+    {
+     "id": "great-tit-willow",
+     "file": "great-tit-willow.mp3",
+     "volume": 44
+    },
+    {
+     "id": "chaffinch-solo",
+     "file": "chaffinch-solo.mp3",
+     "volume": 34
+    },
+    {
+     "id": "meadow-grasshoppers",
+     "file": "meadow-grasshoppers.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "deep-sea-drift",
+   "name": "深海漫游",
+   "subtitle": "海底细响 · 深音持续垫",
+   "tracks": [
+    {
+     "id": "underwater-crackle",
+     "file": "underwater-crackle.mp3",
+     "volume": 52
+    },
+    {
+     "id": "deep-drone",
+     "file": "deep-drone.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "cave-spring",
+   "name": "洞中温泉",
+   "subtitle": "洞中温泉 · 洞穴深处",
+   "tracks": [
+    {
+     "id": "cave-hot-spring",
+     "file": "cave-hot-spring.mp3",
+     "volume": 56
+    },
+    {
+     "id": "deep-cave",
+     "file": "deep-cave.mp3",
+     "volume": 30
+    }
+   ]
+  },
+  {
+   "id": "valley-winds",
+   "name": "长风过谷",
+   "subtitle": "风啸 · 风口低吟 · 沙丘细响",
+   "tracks": [
+    {
+     "id": "howling-wind",
+     "file": "howling-wind.mp3",
+     "volume": 42
+    },
+    {
+     "id": "vent-wind",
+     "file": "vent-wind.mp3",
+     "volume": 32
+    },
+    {
+     "id": "dune-sand",
+     "file": "dune-sand.mp3",
+     "volume": 24
+    }
+   ]
+  },
+  {
+   "id": "summer-dusk",
+   "name": "夏暮虫蛙",
+   "subtitle": "林间立体蝉声 · 沼泽群蛙 · 湿地虫语",
+   "tracks": [
+    {
+     "id": "binaural-cicadas",
+     "file": "binaural-cicadas.mp3",
+     "volume": 46
+    },
+    {
+     "id": "marsh-frogs",
+     "file": "marsh-frogs.mp3",
+     "volume": 26
+    },
+    {
+     "id": "wetland-insects",
+     "file": "wetland-insects.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "camp-night",
+   "name": "营地夜林",
+   "subtitle": "篝火 · 夜林鹿鸣 · 夜间螽斯",
+   "tracks": [
+    {
+     "id": "campfire",
+     "file": "campfire.mp3",
+     "volume": 54
+    },
+    {
+     "id": "night-roe-deer",
+     "file": "night-roe-deer.mp3",
+     "volume": 24
+    },
+    {
+     "id": "katydid-night",
+     "file": "katydid-night.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "fracturing-shore",
+   "name": "裂冰湖岸",
+   "subtitle": "冰湖碎响 · 湖面融冰",
+   "tracks": [
+    {
+     "id": "lake-ice-fractures",
+     "file": "lake-ice-fractures.mp3",
+     "volume": 30
+    },
+    {
+     "id": "melting-lake-ice",
+     "file": "melting-lake-ice.mp3",
+     "volume": 42
+    }
+   ]
+  },
+  {
+   "id": "bedtime-drift",
+   "name": "睡前时刻",
+   "subtitle": "δ 节拍 · 车内雨幕 · 风扇低鸣",
+   "tracks": [
+    {
+     "id": "delta-beat",
+     "file": "delta-beat.mp3",
+     "volume": 30
+    },
+    {
+     "id": "car-rain",
+     "file": "car-rain.mp3",
+     "volume": 38
+    },
+    {
+     "id": "fan-hum",
+     "file": "fan-hum.mp3",
+     "volume": 18
+    }
+   ]
+  },
+  {
+   "id": "desk-grass-rain",
+   "name": "案头草雨",
+   "subtitle": "白噪声 · 草叶雨滴",
+   "tracks": [
+    {
+     "id": "white-noise",
+     "file": "white-noise.mp3",
+     "volume": 22
+    },
+    {
+     "id": "rain-grass-close",
+     "file": "rain-grass-close.mp3",
+     "volume": 50
+    }
+   ]
+  },
+  {
+   "id": "khmer-afternoon",
+   "name": "高棉寺院午后",
+   "subtitle": "柬埔寨诵声 · 棕榈树风",
+   "tracks": [
+    {
+     "id": "cambodian-buddhist-chant",
+     "file": "cambodian-buddhist-chant.mp3",
+     "volume": 44
+    },
+    {
+     "id": "palm-wind",
+     "file": "palm-wind.mp3",
+     "volume": 26
+    }
+   ]
+  },
+  {
+   "id": "nichiren-room",
+   "name": "日莲静室",
+   "subtitle": "日莲诵唱 · 室内静铃",
+   "tracks": [
+    {
+     "id": "nichiren-chant",
+     "file": "nichiren-chant.mp3",
+     "volume": 48
+    },
+    {
+     "id": "room-chimes",
+     "file": "room-chimes.mp3",
+     "volume": 20
+    }
+   ]
+  },
+  {
+   "id": "bright-chimes",
+   "name": "晴空金铃",
+   "subtitle": "轻响金属铃 · 紫噪声",
+   "tracks": [
+    {
+     "id": "metal-chimes",
+     "file": "metal-chimes.mp3",
+     "volume": 38
+    },
+    {
+     "id": "violet-noise",
+     "file": "violet-noise.mp3",
+     "volume": 14
+    }
+   ]
+  },
+  {
+   "id": "summer-rapids",
+   "name": "夏林雨涧",
+   "subtitle": "雨中急流 · 深林夏虫",
+   "tracks": [
+    {
+     "id": "rain-rapids",
+     "file": "rain-rapids.mp3",
+     "volume": 52
+    },
+    {
+     "id": "deep-woods-insects",
+     "file": "deep-woods-insects.mp3",
+     "volume": 24
+    }
+   ]
+  }
+ ]
+}

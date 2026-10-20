@@ -95,16 +95,36 @@ struct MobileSettingsView: View {
                         Text("休息音量")
                     }
                     Button("预听休息结束音") { audio.playSound(sm.settings.breakEndSound, volume: sm.settings.breakEndSoundVolume) }
-                    Picker("环境音", selection: $sm.settings.ambientSound) {
-                        ForEach(AudioManager.allAmbientOptions, id: \.self) { name in
-                            Text(name.replacingOccurrences(of: ".mp3", with: "")).tag(name)
+                    Picker("环境音来源", selection: $sm.settings.ambientSource) {
+                        Text("自定义").tag("custom")
+                        Text("栖时随机").tag("qishi")
+                    }
+                    .pickerStyle(.segmented)
+                    if sm.settings.ambientSource == "qishi" {
+                        Text("每个番茄随机播放一个栖时场景混音（共 \(QishiSceneStore.presets.count) 个场景，从栖时官网流式播放，需联网；暂停恢复自动延续）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Slider(value: $sm.settings.ambientSoundVolume, in: 0...1) {
+                            Text("环境音量")
                         }
+                        Button("试听随机场景") {
+                            if let preset = QishiSceneStore.randomPreset(excluding: nil) {
+                                audio.playQishiScene(preset, volume: sm.settings.ambientSoundVolume)
+                            }
+                        }
+                        Button("停止试听") { audio.stopQishi() }
+                    } else {
+                        Picker("环境音", selection: $sm.settings.ambientSound) {
+                            ForEach(AudioManager.allAmbientOptions, id: \.self) { name in
+                                Text(name.replacingOccurrences(of: ".mp3", with: "")).tag(name)
+                            }
+                        }
+                        Slider(value: $sm.settings.ambientSoundVolume, in: 0...1) {
+                            Text("环境音量")
+                        }
+                        Button("预听环境音") { audio.playSound(sm.settings.ambientSound, volume: sm.settings.ambientSoundVolume) }
+                        Button("停止预听") { audio.stopPreview() }
                     }
-                    Slider(value: $sm.settings.ambientSoundVolume, in: 0...1) {
-                        Text("环境音量")
-                    }
-                    Button("预听环境音") { audio.playSound(sm.settings.ambientSound, volume: sm.settings.ambientSoundVolume) }
-                    Button("停止预听") { audio.stopPreview() }
                     if let error = audio.lastError { Text(error).font(.caption).foregroundColor(.orange) }
                 }
 

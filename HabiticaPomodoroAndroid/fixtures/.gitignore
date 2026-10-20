@@ -1,0 +1,5 @@
+# harness build output and caches — never commit
+.work/
+.toolchain/
+logs/
+__pycache__/

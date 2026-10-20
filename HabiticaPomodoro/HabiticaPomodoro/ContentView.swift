@@ -506,8 +506,32 @@ struct SettingsView: View {
                     sliderRow("Volume", value: $sm.settings.pomoEndSoundVolume)
                     pickerRow("Break end sound", selection: $sm.settings.breakEndSound, options: AudioManager.allSoundOptions)
                     sliderRow("Volume", value: $sm.settings.breakEndSoundVolume)
-                    pickerRow("Ambient sound", selection: $sm.settings.ambientSound, options: AudioManager.allAmbientOptions)
-                    sliderRow("Volume", value: $sm.settings.ambientSoundVolume)
+                    HStack {
+                        Text("Ambient source")
+                        Spacer()
+                        Picker("", selection: $sm.settings.ambientSource) {
+                            Text("Custom").tag("custom")
+                            Text("Qishi Random").tag("qishi")
+                        }
+                        .frame(width: 140)
+                    }
+                    if sm.settings.ambientSource == "qishi" {
+                        Text("每个番茄随机播放一个栖时场景混音（共 \(QishiSceneStore.presets.count) 个场景，暂停恢复自动延续，不与上个番茄重复）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        sliderRow("Volume", value: $sm.settings.ambientSoundVolume)
+                        HStack {
+                            Button("试听随机场景") {
+                                if let preset = QishiSceneStore.randomPreset(excluding: nil) {
+                                    am.playQishiScene(preset, volume: sm.settings.ambientSoundVolume)
+                                }
+                            }
+                            Button("停止试听") { am.stopQishi() }
+                        }
+                    } else {
+                        pickerRow("Ambient sound", selection: $sm.settings.ambientSound, options: AudioManager.allAmbientOptions)
+                        sliderRow("Volume", value: $sm.settings.ambientSoundVolume)
+                    }
                 }
                 Divider()
                 Text("HotKey: ⌥⌘P (Option+Command+P)")

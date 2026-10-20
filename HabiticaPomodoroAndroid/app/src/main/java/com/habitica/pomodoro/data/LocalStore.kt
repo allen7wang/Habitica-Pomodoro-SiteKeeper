@@ -122,8 +122,14 @@ class LocalStore(context: Context) {
         return runCatching { JSONObject(file.readText()) }.getOrNull()
     }
 
-    private fun writeJson(name: String, json: JSONObject) {
-        runCatching {
+    /**
+     * FIX2(D2): returns false when the atomic write failed, so callers that can
+     * surface persistence state (Top3/settings saves) do not proceed silently.
+     * Callers without a user-visible surface keep the old log-and-continue
+     * behavior by ignoring the result.
+     */
+    private fun writeJson(name: String, json: JSONObject): Boolean {
+        return runCatching {
             val file = File(dir, name)
             file.parentFile?.takeIf { !it.exists() }?.mkdirs()
             val temporary = File(dir, "$name.pending")
@@ -131,7 +137,7 @@ class LocalStore(context: Context) {
             if (!temporary.renameTo(file)) throw java.io.IOException("Atomic replacement failed")
         }.onFailure { e ->
             android.util.Log.e(TAG, "写入失败 $name: ${e.message}")
-        }
+        }.isSuccess
     }
 
     /** 数据目录（设置页展示用） */

@@ -30,6 +30,8 @@ struct UserSettings: Codable {
     var pomoEndSoundVolume: Double = 0.5
     var breakEndSoundVolume: Double = 0.5
     var ambientSoundVolume: Double = 0.5
+    /// 环境音来源："custom" = 内置环境音（老方案）；"qishi" = 每个番茄随机播放一个栖时场景混音
+    var ambientSource: String = "custom"
     var developerServerUrl: String = ""
 
     // MARK: - Block Settings (时间块功能)
@@ -62,7 +64,7 @@ struct UserSettings: Codable {
         normalize()
     }
 
-    enum CodingKeys: String, CodingKey { case uid, apiToken, connectHabitica, pomoDurationMins, breakDuration, breakExtention, longBreakDuration, pomoSetNum, manualBreak, breakFreePass, breakExtentionFails, breakExtentionNotify, resetPomoAfterBreak, longBreakNotify, vacationMode, pomoHabitPlus, pomoHabitMinus, pomoSetHabitPlus, customPomodoroTask, customSetTask, pomodoroTaskId, pomodoroSetTaskId, pomoEndSound, breakEndSound, ambientSound, pomoEndSoundVolume, breakEndSoundVolume, ambientSoundVolume, developerServerUrl, enableBlockMode, blockCount, blockPomoCount, blockGoals, blockTimeRanges, blockTasks, blockRewardEnabled, blockSprintReminder, blockStartReminder, blockReminderMinutes }
+    enum CodingKeys: String, CodingKey { case uid, apiToken, connectHabitica, pomoDurationMins, breakDuration, breakExtention, longBreakDuration, pomoSetNum, manualBreak, breakFreePass, breakExtentionFails, breakExtentionNotify, resetPomoAfterBreak, longBreakNotify, vacationMode, pomoHabitPlus, pomoHabitMinus, pomoSetHabitPlus, customPomodoroTask, customSetTask, pomodoroTaskId, pomodoroSetTaskId, pomoEndSound, breakEndSound, ambientSound, pomoEndSoundVolume, breakEndSoundVolume, ambientSoundVolume, ambientSource, developerServerUrl, enableBlockMode, blockCount, blockPomoCount, blockGoals, blockTimeRanges, blockTasks, blockRewardEnabled, blockSprintReminder, blockStartReminder, blockReminderMinutes }
 
     init(from decoder: Decoder) throws {
         self.init()
@@ -95,6 +97,7 @@ struct UserSettings: Codable {
         pomoEndSoundVolume = try c.decodeIfPresent(Double.self, forKey: .pomoEndSoundVolume) ?? pomoEndSoundVolume
         breakEndSoundVolume = try c.decodeIfPresent(Double.self, forKey: .breakEndSoundVolume) ?? breakEndSoundVolume
         ambientSoundVolume = try c.decodeIfPresent(Double.self, forKey: .ambientSoundVolume) ?? ambientSoundVolume
+        ambientSource = try c.decodeIfPresent(String.self, forKey: .ambientSource) ?? ambientSource
         developerServerUrl = try c.decodeIfPresent(String.self, forKey: .developerServerUrl) ?? developerServerUrl
         enableBlockMode = try c.decodeIfPresent(Bool.self, forKey: .enableBlockMode) ?? enableBlockMode
         blockCount = try c.decodeIfPresent(Int.self, forKey: .blockCount) ?? blockCount

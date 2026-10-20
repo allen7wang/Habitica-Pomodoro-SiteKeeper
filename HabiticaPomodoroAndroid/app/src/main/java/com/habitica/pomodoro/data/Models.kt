@@ -37,6 +37,9 @@ data class UserSettings(
     val breakEndSoundVolume: Double = 0.5,
     val ambientSound: String = "None",
     val ambientSoundVolume: Double = 0.5,
+    /** 环境音来源："custom" = 内置环境音单轨；"qishi" = 每个番茄随机播放一个栖时场景混音。
+     *  字段名与 Apple 端设置 JSON 逐字一致；旧数据缺字段时宽松解码为 "custom"。 */
+    val ambientSource: String = "custom",
     val customPomodoroTask: Boolean = false,
     val customSetTask: Boolean = false,
     val developerServerUrl: String = "",
@@ -61,6 +64,7 @@ data class UserSettings(
         put("breakEndSoundVolume", breakEndSoundVolume)
         put("ambientSound", ambientSound)
         put("ambientSoundVolume", ambientSoundVolume)
+        put("ambientSource", ambientSource)
         put("customPomodoroTask", customPomodoroTask)
         put("customSetTask", customSetTask)
         put("developerServerUrl", developerServerUrl)
@@ -104,6 +108,7 @@ data class UserSettings(
             breakEndSoundVolume = json.optDouble("breakEndSoundVolume", 0.5),
             ambientSound = json.optString("ambientSound", "None"),
             ambientSoundVolume = json.optDouble("ambientSoundVolume", 0.5),
+            ambientSource = json.optString("ambientSource", "custom").takeIf { it.isNotBlank() && it != "null" } ?: "custom",
             customPomodoroTask = json.optBoolean("customPomodoroTask", json.optString("pomodoroTaskId").let { it.isNotBlank() && it != "null" }),
             customSetTask = json.optBoolean("customSetTask", json.optString("pomodoroSetTaskId").let { it.isNotBlank() && it != "null" }),
             developerServerUrl = json.optString("developerServerUrl", ""),
@@ -312,6 +317,17 @@ data class TopThreeStore(
         val canonical = canonicalOwners()
         val canonicalOwner = canonicalCloudAccount(owner)
         if (canonical != this || canonicalOwner != owner) return canonical.forAccount(canonicalOwner)
+        // D3 (evaluated; adoption kept): the first owner initialization adopts pre-existing
+        // deletedCloudIds/deletedCloudTaskOrigins/deletedCreateMarkers wholesale. Legacy JSON
+        // carries no reliable ownership evidence to filter by: only stores written AFTER the
+        // owner-partition feature stamp cloudAccount on task rows (and those have
+        // ownerInitialized == true, so they never reach this branch), while the queue/marker
+        // rows never carried any per-entry owner metadata at all. The residual risk is bounded:
+        // deletes execute only against the server-side authenticated account (a foreign id
+        // 404s and stays queued instead of deleting anything), and every history consumer
+        // (pendingCreateCandidates/remoteIdOccupied/mayDelete/merge) filters rows by
+        // cloudAccount. Adoption preserves the delete intents of single-account legacy users —
+        // the only population that reaches this path — which outweighs discarding them.
         if (!ownerInitialized) return copy(cloudAccount = owner, ownerInitialized = true,
             history = history.mapValues { (_, day) -> day.copy(taskGroups = day.taskGroups.map { group ->
                 group.map { if (it.cloudAccount == null) it.copy(cloudAccount = owner) else it }
@@ -521,4 +537,55 @@ fun UserSettings.normalized(): UserSettings {
 data class DayHistogram(val pomodoros: Int = 0, val minutes: Int = 0, val weekday: String = "") {
     fun toJson() = JSONObject().apply { put("pomodoros", pomodoros); put("minutes", minutes); put("weekday", weekday) }
     companion object { fun fromJson(j: JSONObject) = DayHistogram(j.optInt("pomodoros").coerceAtLeast(0), j.optInt("minutes").coerceAtLeast(0), j.optString("weekday")) }
+}
+
+// MARK: - 栖时场景库（assets audio/qishi_presets.json；字段名与 Apple 端 QishiTrack/QishiPreset 逐字一致）
+
+data class QishiTrack(
+    val id: String,
+    val file: String,
+    /** 栖时调好的场景混音比例 0-100；播放增益 = volume/100 × 用户环境音量 */
+    val volume: Int,
+)
+
+data class QishiPreset(
+    val id: String,
+    val name: String,
+    val subtitle: String,
+    val tracks: List<QishiTrack>,
+)
+
+object QishiLibrary {
+    /** 音频不随包（152MB）；统一从栖时公开站点流式播放（与 Apple 端 streamBase 一致）。 */
+    const val STREAM_BASE = "https://allen7wang.github.io/qishi-meditation-web/audio/"
+    const val ASSET_PATH = "audio/qishi_presets.json"
+
+    /** 宽松解析：跳过缺 id 或没有任何可播轨道的条目；音量夹到 0..100。 */
+    fun parse(json: JSONObject): List<QishiPreset> =
+        json.optJSONArray("presets")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(::presetFrom) }
+        } ?: emptyList()
+
+    private fun presetFrom(json: JSONObject): QishiPreset? {
+        val id = json.optString("id", "")
+        if (id.isBlank()) return null
+        val tracks = json.optJSONArray("tracks")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(::trackFrom) }
+        } ?: emptyList()
+        if (tracks.isEmpty()) return null
+        return QishiPreset(id, json.optString("name", ""), json.optString("subtitle", ""), tracks)
+    }
+
+    private fun trackFrom(json: JSONObject): QishiTrack? {
+        val file = json.optString("file", "")
+        if (file.isBlank()) return null
+        return QishiTrack(json.optString("id", ""), file, json.optInt("volume", 100).coerceIn(0, 100))
+    }
+
+    /** 随机一个场景；候选多于一个时避开 excluding（不与上个番茄重复）。与 Apple QishiSceneStore.randomPreset 一致。 */
+    fun randomPreset(library: List<QishiPreset>, excluding: String?): QishiPreset? {
+        if (library.isEmpty()) return null
+        val pool = if (excluding != null && library.size > 1) library.filterNot { it.id == excluding } else library
+        return (if (pool.isEmpty()) library else pool).random()
+    }
 }

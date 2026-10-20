@@ -196,3 +196,5 @@ ModelManifest.xml
 HabiticaPomodoro/HabiticaPomodoroMobile.xcodeproj/
 # 遗留的半成品工程目录（由 project.yml + xcodegen 取代）
 HabiticaPomodoro/HabiticaPomodoro.xcodeproj/
+HabiticaPomodoro/TodayTasksWidget/TodayTasksWidget.xcodeproj/
+HabiticaPomodoro/TodayTasksWidget/Generated/

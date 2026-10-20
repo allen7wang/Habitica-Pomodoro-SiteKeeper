@@ -10,6 +10,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.habitica.pomodoro.MainActivity
 import com.habitica.pomodoro.PomoApplication
 import com.habitica.pomodoro.R
+import com.habitica.pomodoro.engine.PomodoroViewModel
 import com.habitica.pomodoro.engine.PomodoroViewModel.Phase
 
 /** Rendering/audio only. Business deadlines enter the application's single engine. */
@@ -29,6 +30,8 @@ class PomodoroTimerService : Service() {
         super.onCreate(); current = this; createChannels(this)
         audio = PomoAudio(this)
         audio.onEffectFinished = { if (stopping && !audio.effectPlaying) stopEverything() }
+        // 栖时流式全轨失败等播放错误 → 引擎既有 message 通道（主线程回调）
+        audio.onQishiError = { error -> engine.reportAudioError(error) }
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -62,8 +65,14 @@ class PomodoroTimerService : Service() {
     }
     fun refreshAudio() {
         val s = engine.state.value
-        if (!stopping && s.isRunning && s.phase == Phase.POMODORO) audio.ambient(s.settings.ambientSound, s.settings.ambientSoundVolume)
-        else audio.stopAmbient()
+        if (!stopping && s.isRunning && s.phase == Phase.POMODORO) {
+            if (s.settings.ambientSource == PomodoroViewModel.AMBIENT_SOURCE_QISHI) {
+                // 栖时模式：播放 VM 已选定的场景混音（暂停恢复/回前台延续同一场景，不重随机）；
+                // 场景缺失（库不可用等）保持静音，不回退到自定义单轨
+                val scene = s.qishiScene
+                if (scene != null) audio.playQishiScene(scene, s.settings.ambientSoundVolume) else audio.stopAmbient()
+            } else audio.ambient(s.settings.ambientSound, s.settings.ambientSoundVolume)
+        } else audio.stopAmbient()
     }
     private fun startTicker() {
         val epoch = ++generation
@@ -108,7 +117,7 @@ class PomodoroTimerService : Service() {
     private fun releaseWakeLock() { if (wakeLock?.isHeld == true) wakeLock?.release(); wakeLock = null }
     private fun stopEverything() { generation++; handler.removeCallbacksAndMessages(null); releaseWakeLock(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
-        current = null; generation++; handler.removeCallbacksAndMessages(null); audio.onEffectFinished = null; audio.stopAll(); releaseWakeLock(); super.onDestroy()
+        current = null; generation++; handler.removeCallbacksAndMessages(null); audio.onEffectFinished = null; audio.onQishiError = null; audio.stopAll(); releaseWakeLock(); super.onDestroy()
     }
     companion object {
         private var current: PomodoroTimerService? = null

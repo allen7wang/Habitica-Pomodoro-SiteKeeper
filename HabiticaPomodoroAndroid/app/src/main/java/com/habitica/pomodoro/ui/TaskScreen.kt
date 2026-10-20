@@ -83,6 +83,10 @@ fun TaskScreen(
             Text("云端同步失败（本地任务保留）：$error", color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall)
         }
+        state.persistenceError?.let { error ->
+            Text(error, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+        }
         Text(
             text = "今天可编辑 · 昨天只读（未完成的可以移动到今天）",
             style = MaterialTheme.typography.bodySmall,

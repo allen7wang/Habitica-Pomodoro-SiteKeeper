@@ -1,6 +1,9 @@
 import Foundation
 import AVFoundation
 import Combine
+#if os(macOS)
+import WidgetKit
+#endif
 
 // MARK: - Data Directory (配置文件统一存放在 Documents 下的隐藏文件夹)
 // ~/Documents 由 iCloud Drive（桌面与文稿同步）自动同步，
@@ -530,6 +533,36 @@ class BlockProgressManager: ObservableObject {
 }
 
 // MARK: - Top Three Manager (当天最重要的三件事 + 琐事，同步 Habitica)
+#if os(macOS)
+/// 主 App（非沙箱）→ 沙箱 widget 的数据桥。
+/// macOS 强制 app extension 沙箱（pkd: "plug-ins must be sandboxed"），widget 无法直读
+/// ~/Documents；主 App 把 Top3 快照写入 widget 容器的 Application Support/widget-data.json，
+/// widget 在自己沙箱内读取合法。只写 widget 自己的容器，不影响任何其他数据。
+enum WidgetBridge {
+    static let widgetBundleId = "com.hermes.habitica-pomodoro.TodayTasksWidget"
+
+    static func writeSnapshot(store: TopThreeStore) {
+        let fm = FileManager.default
+        let dir = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/\(widgetBundleId)/Data/Library/Application Support")
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let storeData = try JSONEncoder().encode(store)
+            let storeObj = try JSONSerialization.jsonObject(with: storeData)
+            let snapshot: [String: Any] = [
+                "updatedAt": Date().timeIntervalSince1970,
+                "boundaryMinutes": SettingsManager.shared.settings.blockTimeRanges.first?.startMinutes ?? 0,
+                "store": storeObj,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: snapshot)
+            try data.write(to: dir.appendingPathComponent("widget-data.json"), options: .atomic)
+        } catch {
+            print("WidgetBridge snapshot failed: \(error)")
+        }
+    }
+}
+#endif
+
 class TopThreeManager: ObservableObject {
     static let shared = TopThreeManager()
 
@@ -572,6 +605,10 @@ class TopThreeManager: ObservableObject {
             if migrated { store.history[key] = day }
         }
         if migrated { save() }
+        #if os(macOS)
+        // 首启即写 widget 快照（save() 未触发时 widget 也有数据）
+        WidgetBridge.writeSnapshot(store: store)
+        #endif
     }
 
     private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
@@ -598,6 +635,11 @@ class TopThreeManager: ObservableObject {
             }
             try jsonData.write(to: url, options: .atomic)
             PomodoroDataDir.noteLocalWrite(url.lastPathComponent, data: jsonData)
+            #if os(macOS)
+            // 立即刷新桌面小组件（今日任务完成情况）；无 widget 时为空操作
+            WidgetBridge.writeSnapshot(store: store)
+            WidgetCenter.shared.reloadTimelines(ofKind: "TodayTasks")
+            #endif
             print("TopThree saved to: \(url.path)")
             return true
         } catch {
@@ -633,6 +675,11 @@ class TopThreeManager: ObservableObject {
             if migrated { store.history[key] = day }
         }
         if migrated { save() }
+        #if os(macOS)
+        // iCloud 同步/目录切换重载后同步刷新 widget 快照
+        WidgetBridge.writeSnapshot(store: store)
+        WidgetCenter.shared.reloadTimelines(ofKind: "TodayTasks")
+        #endif
         print("TopThree reloaded from: \(fileURL.path)")
     }
 
@@ -1371,17 +1418,28 @@ class HistogramManager: ObservableObject {
 
     private static func rememberBackup(_ data: Data, at url: URL) {
         let key = "habitica_pomodoro_histogram"
+        let path = backupPath(url)
         var backups = UserDefaults.standard.dictionary(forKey: key + "_backupsByPath") ?? [:]
-        backups[backupPath(url)] = data
+        backups[path] = data
         UserDefaults.standard.set(backups, forKey: key + "_backupsByPath")
-        UserDefaults.standard.set(data, forKey: key) // Retain the legacy public backup contract.
-        UserDefaults.standard.set(backupPath(url), forKey: key + "_backupPath")
+        // Atomic (data, path) pair in ONE write: a crash between writes can never leave
+        // new data paired with a stale recorded path (or vice versa).
+        UserDefaults.standard.set(["path": path, "data": data], forKey: key + "_backupEntry")
+        // Legacy contract for older readers (best-effort; no longer the recovery source of truth).
+        UserDefaults.standard.set(data, forKey: key)
+        UserDefaults.standard.set(path, forKey: key + "_backupPath")
     }
 
     private static func backup(at url: URL) -> Histogram? {
         let key = "habitica_pomodoro_histogram"
         let path = backupPath(url)
         var data = UserDefaults.standard.dictionary(forKey: key + "_backupsByPath")?[path] as? Data
+        // Prefer the atomic entry: its data is only ever paired with its own path.
+        if data == nil,
+           let entry = UserDefaults.standard.dictionary(forKey: key + "_backupEntry"),
+           (entry["path"] as? String) == path {
+            data = entry["data"] as? Data
+        }
         let legacyPath = UserDefaults.standard.string(forKey: key + "_backupPath")
         // Ownerless old backup belongs only to the original sandbox/Documents store, not a grant.
         // Require explicit proof the legacy backup matches the target path; absence of metadata
@@ -1523,12 +1581,68 @@ class HistogramManager: ObservableObject {
 }
 
 // MARK: - Audio Manager
+// MARK: - 栖时场景库（qishi_presets.json 随包快照；音频 macOS 优先本机栖时仓库、缺失走公开站流式，iOS 直接流式）
+
+struct QishiTrack: Codable {
+    let id: String
+    let file: String
+    let volume: Int   // 0-100，栖时调好的场景混音比例
+}
+
+struct QishiPreset: Codable {
+    let id: String
+    let name: String
+    let subtitle: String
+    let tracks: [QishiTrack]
+}
+
+struct QishiLibraryFile: Codable {
+    let version: Int
+    let presets: [QishiPreset]
+}
+
+enum QishiSceneStore {
+    static let streamBase = "https://allen7wang.github.io/qishi-meditation-web/audio/"
+
+    static let presets: [QishiPreset] = {
+        let url = Bundle.main.url(forResource: "qishi_presets", withExtension: "json", subdirectory: "audio")
+            ?? Bundle.main.url(forResource: "qishi_presets", withExtension: "json")
+        guard let url = url, let data = try? Data(contentsOf: url),
+              let lib = try? JSONDecoder().decode(QishiLibraryFile.self, from: data) else { return [] }
+        return lib.presets
+    }()
+
+    static func audioURL(for file: String) -> URL? {
+        #if os(macOS)
+        let local = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("GitHub/qishi-meditation/public/audio").appendingPathComponent(file)
+        if FileManager.default.fileExists(atPath: local.path) { return local }
+        #endif
+        guard let encoded = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: streamBase + encoded)
+    }
+
+    /// 随机一个场景；候选多于一个时避开 excluding（不与上个番茄重复）
+    static func randomPreset(excluding id: String?) -> QishiPreset? {
+        guard !presets.isEmpty else { return nil }
+        var pool = presets
+        if let id = id, pool.count > 1 { pool.removeAll { $0.id == id } }
+        return pool.randomElement()
+    }
+}
+
 class AudioManager: ObservableObject {
     static let shared = AudioManager()
 
     private var ambientPlayer: AVAudioPlayer?
     private var soundPlayer: AVAudioPlayer?
     private var ambientFilename: String?
+    // 栖时场景多轨播放（AVPlayer：本地文件与公开站流式统一支持；循环 = 播完 seek 0 重播）
+    private var qishiPlayers: [(player: AVPlayer, trackVolume: Int)] = []
+    private var qishiObservers: [NSObjectProtocol] = []
+    private(set) var currentQishiSceneId: String?
+    /// 跨番茄记忆：新番茄随机场景时避开上一个（stop 后保留）
+    private(set) var lastQishiSceneId: String?
     @Published var lastError: String?
 
     // Sound file lists (mirror the extension)
@@ -1599,6 +1713,84 @@ class AudioManager: ObservableObject {
         ambientPlayer?.stop()
         ambientPlayer = nil
         ambientFilename = nil
+        stopQishi()
+    }
+
+    // MARK: - 栖时随机场景（ambientSource == "qishi"）
+
+    /// 统一环境音入口：qishi 模式每个番茄随机一个场景混音；custom 模式维持原单轨方案。
+    /// newSession=true 在番茄开始时调用（换新场景，避开上个番茄）；
+    /// false 在暂停恢复/回前台时调用（延续当前场景，只调音量或重播同一场景）。
+    func playAmbientFor(settings: UserSettings, newSession: Bool) {
+        guard settings.ambientSource == "qishi" else {
+            stopQishi()
+            playAmbient(sound: settings.ambientSound, volume: settings.ambientSoundVolume)
+            return
+        }
+        // 停掉自定义单轨（若之前是 custom 模式）
+        ambientPlayer?.stop(); ambientPlayer = nil; ambientFilename = nil
+        let preset: QishiPreset?
+        if !newSession, let id = currentQishiSceneId,
+           let p = QishiSceneStore.presets.first(where: { $0.id == id }) {
+            preset = p
+        } else {
+            preset = QishiSceneStore.randomPreset(excluding: lastQishiSceneId)
+        }
+        guard let chosen = preset else {
+            lastError = "栖时场景库不可用（qishi_presets.json 缺失或为空）"
+            return
+        }
+        if currentQishiSceneId == chosen.id, isQishiPlaying {
+            setQishiVolume(settings.ambientSoundVolume)
+            return
+        }
+        playQishiScene(chosen, volume: settings.ambientSoundVolume)
+    }
+
+    private var isQishiPlaying: Bool { qishiPlayers.contains { $0.player.rate > 0 } }
+
+    private static func trackGain(_ trackVolume: Int, user: Double) -> Double {
+        min(1, max(0, Double(trackVolume) / 100.0 * min(1, max(0, user))))
+    }
+
+    func playQishiScene(_ preset: QishiPreset, volume: Double) {
+        stopQishi()
+        for track in preset.tracks {
+            guard let url = QishiSceneStore.audioURL(for: track.file) else { continue }
+            let player = AVPlayer(url: url)
+            player.volume = Float(Self.trackGain(track.volume, user: volume))
+            let observer = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: nil
+            ) { _ in
+                player.seek(to: .zero)
+                player.play()
+            }
+            qishiObservers.append(observer)
+            qishiPlayers.append((player, track.volume))
+            player.play()
+        }
+        guard !qishiPlayers.isEmpty else {
+            lastError = "栖时场景播放失败：\(preset.name)（音频不可用）"
+            return
+        }
+        currentQishiSceneId = preset.id
+        lastQishiSceneId = preset.id
+        lastError = nil
+    }
+
+    /// 只调音量不重启播放（暂停恢复/设置变更）
+    func setQishiVolume(_ volume: Double) {
+        for entry in qishiPlayers {
+            entry.player.volume = Float(Self.trackGain(entry.trackVolume, user: volume))
+        }
+    }
+
+    func stopQishi() {
+        for o in qishiObservers { NotificationCenter.default.removeObserver(o) }
+        qishiObservers.removeAll()
+        for entry in qishiPlayers { entry.player.pause(); entry.player.replaceCurrentItem(with: nil) }
+        qishiPlayers.removeAll()
+        currentQishiSceneId = nil
     }
 
     /// Short previews use the alert player, never replace the ongoing focus ambience.

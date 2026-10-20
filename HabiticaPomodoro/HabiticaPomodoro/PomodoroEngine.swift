@@ -106,7 +106,7 @@ class PomodoroEngine: ObservableObject {
         beginPhase(.pomodoro, duration: configuration.pomoDurationMins * 60) { [weak self] date in
             self?.completePomodoro(at: date)
         }
-        audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
+        audioManager.playAmbientFor(settings: configuration, newSession: true)
     }
 
     /// Compatibility entry point; duplicate callbacks after a transition cannot count twice.
@@ -311,7 +311,7 @@ class PomodoroEngine: ObservableObject {
         // Preserve the handler belonging to the paused phase; a break must never complete a pomodoro.
         beginPhase(phase, duration: timerValue, end: handler)
         if phase == .pomodoro, let configuration = activePomodoroSettings {
-            audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
+            audioManager.playAmbientFor(settings: configuration, newSession: false)
         }
     }
 
@@ -404,7 +404,7 @@ class PomodoroEngine: ObservableObject {
             #endif
             handler?(deadline)
         } else if phase == .pomodoro, let configuration = activePomodoroSettings {
-            audioManager.playAmbient(sound: configuration.ambientSound, volume: configuration.ambientSoundVolume)
+            audioManager.playAmbientFor(settings: configuration, newSession: false)
         }
         updateTomato()
         notifyBadge()

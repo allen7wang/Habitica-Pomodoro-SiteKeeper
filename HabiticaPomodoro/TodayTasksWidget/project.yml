@@ -1,0 +1,32 @@
+name: TodayTasksWidget
+options:
+  bundleIdPrefix: com.hermes.habitica-pomodoro
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+targets:
+  TodayTasksWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: 今日任务
+        CFBundleShortVersionString: "1.2.4"
+        CFBundleVersion: "7"
+        LSMinimumSystemVersion: "14.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hermes.habitica-pomodoro.TodayTasksWidget
+        PRODUCT_NAME: TodayTasksWidget
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        ASSETCATALOG_COMPILER_OPTIMIZATION: space

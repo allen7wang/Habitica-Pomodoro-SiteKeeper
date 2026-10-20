@@ -11,6 +11,8 @@ import com.habitica.pomodoro.data.BlockProgress
 import com.habitica.pomodoro.data.BlockTask
 import com.habitica.pomodoro.data.DailyBlockProgress
 import com.habitica.pomodoro.data.PlantDay
+import com.habitica.pomodoro.data.QishiLibrary
+import com.habitica.pomodoro.data.QishiPreset
 import com.habitica.pomodoro.data.HabiticaTaskItem
 import com.habitica.pomodoro.data.calendarDayKey
 import com.habitica.pomodoro.data.currentBlockIndex
@@ -72,7 +74,13 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val tasksError: String? = null,
         val topThreeSyncing: Boolean = false,
         val topThreeSyncError: String? = null,
+        // FIX2(D2): non-null while a local store save is failing; the in-memory
+        // state still advances, but the user must see that persistence failed.
+        val persistenceError: String? = null,
         val scoringIds: Set<String> = emptySet(),
+        /** 当前番茄激活的栖时场景（ambientSource=="qishi"）。专注开始时随机选出；
+         *  暂停/回前台延续同一场景；每个环境音停止点清空。播放由前台服务的 refreshAudio 消费。 */
+        val qishiScene: QishiPreset? = null,
     )
 
     private val store = LocalStore(app)
@@ -99,6 +107,13 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
     private var topThreeSyncJob: Job? = null
     private var topThreeSyncGeneration = 0
 
+    /** 场景库加载注入点：设备上由 PomoApplication 注入 assets 读取实现；fixtures 注入仓库文件读取。
+     *  未注入或读取失败 → 空库（选择结果为 null，走"场景库不可用"提示）。 */
+    var qishiLibraryLoader: (() -> List<QishiPreset>)? = null
+    private var qishiLibraryCache: List<QishiPreset>? = null
+    /** 跨番茄记忆：新番茄随机场景时避开上一个（激活场景清空后仍保留，与 Apple lastQishiSceneId 一致） */
+    private var lastQishiSceneId: String? = null
+
     private fun isCurrentAccount(settings: UserSettings, generation: Int): Boolean {
         val now = _state.value.settings
         return generation == accountGeneration && now.uid == settings.uid &&
@@ -120,7 +135,7 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadAll() {
         val settings = store.loadSettings()
         val topThree = store.loadTopThree().forAccount(settings.cloudAccount())
-        store.saveTopThree(topThree)
+        val topThreeSaved = store.saveTopThree(topThree)
         val todayKey = calendarDayKey()
         val counts = store.loadPomoCount()
         _state.value = _state.value.copy(
@@ -133,6 +148,7 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
             dailyBlocks = store.loadDailyBlocks(),
             blockHistory = store.loadBlockHistory(),
             plants = store.loadPlants(),
+            persistenceError = if (topThreeSaved) null else TOP_THREE_PERSIST_FAILED,
         )
         refreshDay()
         restoreTimer()
@@ -165,6 +181,9 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         completedSet = false
         phaseSnapshot = TimerBusinessSnapshot.capture(s.settings)
         beginPhase(Phase.POMODORO, s.settings.pomoDurationMins * 60)
+        // 栖时模式：每个番茄开始时随机选一个新场景（避开上个番茄）。放在 beginPhase 之后，
+        // 因为 beginPhase 会清空 message，"场景库不可用"提示必须随后写入状态。
+        selectQishiScene(s.settings)
     }
 
     private fun startBreak(startingAt: Long = System.currentTimeMillis()) {
@@ -198,7 +217,9 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         phaseEndsAt = startingAt + seconds * 1000L
         pausedRemainingSeconds = 0
         _state.value = _state.value.copy(phase = phase, isRunning = true, totalSeconds = seconds,
-            remainingSeconds = seconds, message = null)
+            remainingSeconds = seconds, message = null,
+            // 进入非专注阶段（休息/延长）即清空激活场景；POMODORO 由紧随其后的选择逻辑写入
+            qishiScene = if (phase == Phase.POMODORO) _state.value.qishiScene else null)
         persistTimer()
         if (!processingDeadline) { syncTimerService(); startTicking() }
     }
@@ -261,7 +282,8 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         phaseSnapshot = null
         if (resetCombo) completedSet = false
         _state.value = _state.value.copy(phase = Phase.IDLE, isRunning = false, remainingSeconds = 0,
-            totalSeconds = 0, pomoSetCounter = if (resetCombo) 0 else _state.value.pomoSetCounter)
+            totalSeconds = 0, pomoSetCounter = if (resetCombo) 0 else _state.value.pomoSetCounter,
+            qishiScene = null)
         persistTimer()
         PomodoroTimerService.stop(getApplication())
     }
@@ -291,6 +313,8 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resyncAfterForeground() {
         refreshDay(); refreshTopThreeFromCloud(); resyncTimer(); refreshDay()
+        // 进程恢复后正在运行的专注可能丢失了内存中的场景：补选一次；已有场景绝不重随机。
+        ensureQishiSceneForRunningFocus()
         com.habitica.pomodoro.service.BlockReminderReceiver.schedule(getApplication(), _state.value.settings)
     }
     private fun resyncTimer() {
@@ -382,7 +406,7 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = s.copy(histogram = histogram, pomoCounts = histogram.mapValues { it.value.pomodoros },
             todayPomodoros = histogram[calendarDayKey()]?.pomodoros ?: 0, pomoSetCounter = combo,
             phase = if (settings.manualBreak) Phase.MANUAL_BREAK else Phase.IDLE, isRunning = false,
-            remainingSeconds = 0, totalSeconds = 0, message = message)
+            remainingSeconds = 0, totalSeconds = 0, message = message, qishiScene = null)
         persistTimer()
         PomodoroTimerService.endSignal(getApplication(), if (setComplete) "一组番茄完成" else "番茄结束", message,
             settings.pomoEndSound, settings.pomoEndSoundVolume)
@@ -552,8 +576,10 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
             persistStore(next)
             settings = settings.copy(pomodoroTaskId = next.pomodoroHabitId, pomodoroSetTaskId = next.comboHabitId)
         }
-        store.saveSettings(settings)
-        _state.value = _state.value.copy(settings = settings)
+        val settingsSaved = store.saveSettings(settings)
+        _state.value = _state.value.copy(settings = settings,
+            // FIX2(D2): surface a failed settings save; keep an active Top3 error otherwise.
+            persistenceError = if (settingsSaved) _state.value.persistenceError else SETTINGS_PERSIST_FAILED)
         refreshDay()
         if (old.uid != settings.uid || old.apiToken != settings.apiToken || old.connectHabitica != settings.connectHabitica || old.developerServerUrl != settings.developerServerUrl) {
             accountGeneration++
@@ -571,6 +597,8 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         if (old.blockStartReminder != settings.blockStartReminder || old.enableBlockMode != settings.enableBlockMode ||
             old.blockCount != settings.blockCount || old.blockReminderMinutes != settings.blockReminderMinutes || old.blockTimeRanges != settings.blockTimeRanges || old.blockGoals != settings.blockGoals)
             com.habitica.pomodoro.service.BlockReminderReceiver.schedule(getApplication(), settings)
+        // 运行中的专注切到 qishi（或恢复后场景缺失）：立即补选场景，随后的 refreshAudio 就能播放
+        ensureQishiSceneForRunningFocus()
         PomodoroTimerService.refreshAudio(getApplication())
     }
 
@@ -726,6 +754,45 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshRuntimeAudio() { PomodoroTimerService.refreshAudio(getApplication()) }
 
+    // MARK: - 栖时随机场景（ambientSource == "qishi"）
+    // 选择与延续逻辑全部在 VM 层（可离线测试）；MediaPlayer 多轨流式播放只在 PomoAudio。
+
+    private fun qishiLibrary(): List<QishiPreset> = qishiLibraryCache
+        ?: (runCatching { qishiLibraryLoader?.invoke() }.getOrNull() ?: emptyList<QishiPreset>()).also { qishiLibraryCache = it }
+
+    /** 新番茄开始：随机选一个场景并避开上个番茄；custom 模式清空场景状态。 */
+    private fun selectQishiScene(settings: UserSettings) {
+        if (settings.ambientSource != AMBIENT_SOURCE_QISHI) {
+            if (_state.value.qishiScene != null) _state.value = _state.value.copy(qishiScene = null)
+            return
+        }
+        val chosen = QishiLibrary.randomPreset(qishiLibrary(), excluding = lastQishiSceneId)
+        if (chosen == null) {
+            _state.value = _state.value.copy(qishiScene = null, message = QISHI_LIBRARY_UNAVAILABLE)
+            return
+        }
+        lastQishiSceneId = chosen.id
+        _state.value = _state.value.copy(qishiScene = chosen)
+    }
+
+    /** 正在运行的专注缺失场景（中途切到 qishi / 进程恢复后）时补选一次；已有场景绝不重随机。 */
+    private fun ensureQishiSceneForRunningFocus() {
+        val s = _state.value
+        if (s.settings.ambientSource == AMBIENT_SOURCE_QISHI && s.qishiScene == null && s.isRunning && s.phase == Phase.POMODORO)
+            selectQishiScene(s.settings)
+    }
+
+    /** 设置页试听：随机场景，不写 lastQishiSceneId、不影响当前番茄（试听播放器独立于前台服务）。 */
+    fun randomQishiPreviewScene(): QishiPreset? = QishiLibrary.randomPreset(qishiLibrary(), excluding = null)
+
+    /** 场景总数（设置页文案用）。 */
+    fun qishiSceneCount(): Int = qishiLibrary().size
+
+    /** 设备端播放错误（如栖时流式全轨失败）经既有 message 通道提示。 */
+    fun reportAudioError(text: String) {
+        _state.value = _state.value.copy(message = text)
+    }
+
     fun clearMessage() {
         _state.value = _state.value.copy(message = null)
     }
@@ -742,7 +809,10 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         val request = ++topThreeSyncGeneration
         val revision = localRevision
         topThreeSyncJob = viewModelScope.launch {
-            _state.value = _state.value.copy(topThreeSyncing = true, topThreeSyncError = null)
+            // FIX3(D4): no optimistic clear at cycle start — an error whose condition
+            // is still active (markers, delete protection, persistence failure) must
+            // stay displayed. Clearing happens at successful completion, guarded.
+            _state.value = _state.value.copy(topThreeSyncing = true)
             val result = HabiticaAPI.fetchTopThreeTodos(settings)
             if (!isCurrentAccount(settings, generation) || request != topThreeSyncGeneration) return@launch
             when (result) {
@@ -751,8 +821,24 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
                     val merged = if (revision == localRevision && creatingTasks == 0) mergeTopThreeTodos(current, result.value) else current
                     if (merged != current) persistStore(merged)
                     val deletionConflict = result.value.any { it.id !in current.deletedCloudIds && current.quarantinesDeletedCreation(it) }
+                    // FIX3(D4): a stale error must not survive a clean successful cycle, but
+                    // never clear while an error condition is still active: quarantine
+                    // conflict (this cycle), unresolved create markers, delete protection for
+                    // a queued id, or a persistence failure (FIX2) of this cycle's save.
+                    val latest = _state.value.store
+                    val markersPending = latest.deletedCreateMarkers.isNotEmpty()
+                    val deleteProtectionActive = latest.deletedCloudIds.any { id ->
+                        latest.history.values.any { day -> day.taskGroups.flatten().any {
+                            it.cloudAccount == latest.cloudAccount && it.habiticaTaskId == id &&
+                                !(latest.deletedCloudTaskOrigins[id] == it.id && it.movedToToday)
+                        } }
+                    }
                     _state.value = _state.value.copy(topThreeSyncing = false,
-                        topThreeSyncError = if (deletionConflict) "未确认创建请求的删除仍待核对；同日期 notes 的未知任务已隔离（包括改名任务），请人工核对，未按 notes 删除" else _state.value.topThreeSyncError)
+                        topThreeSyncError = when {
+                            deletionConflict -> "未确认创建请求的删除仍待核对；同日期 notes 的未知任务已隔离（包括改名任务），请人工核对，未按 notes 删除"
+                            markersPending || deleteProtectionActive || _state.value.persistenceError != null -> _state.value.topThreeSyncError
+                            else -> null
+                        })
                 }
                 is HabiticaAPI.Result.Error -> _state.value = _state.value.copy(topThreeSyncing = false, topThreeSyncError = result.message)
             }
@@ -991,6 +1077,23 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         } } }
     }
 
+    /**
+     * FIX1(P0): user-confirmed manual cleanup for orphaned creation markers.
+     * Markers queued before the D1 fix have no remote-id association and can
+     * never resolve automatically: every retry re-errors and the quarantine
+     * keeps blocking same-signature inbound todos. Clears deletedCreateMarkers
+     * and deletedCloudIdMarkers for the CURRENT owner partition only, persisted
+     * via the normal store save (which also refreshes the counts the settings
+     * entry displays). NEVER touches deletedCloudIds / deletedCloudTaskOrigins
+     * (explicit delete intents are sacred) nor other owners' accountStores
+     * partitions. The UI must gate this behind an explicit confirmation;
+     * there is no automatic or time-based cleanup.
+     */
+    fun clearQuarantinedCreateMarkers() {
+        val s = _state.value.store
+        persistStore(s.copy(deletedCreateMarkers = emptySet(), deletedCloudIdMarkers = emptyMap()))
+    }
+
     /** 昨天未完成的任务移动到今天（对应 Swift moveTaskToToday） */
     fun moveTaskToToday(categoryIndex: Int, taskIndex: Int) {
         val s = _state.value.store
@@ -1105,8 +1208,10 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun persistStore(s: TopThreeStore) {
         localRevision++
-        store.saveTopThree(s)
-        _state.value = _state.value.copy(store = s)
+        // FIX2(D2): a failed save must surface; memory keeps advancing as before.
+        val saved = store.saveTopThree(s)
+        _state.value = _state.value.copy(store = s,
+            persistenceError = if (saved) null else TOP_THREE_PERSIST_FAILED)
     }
 
     /** Creation has no idempotency token: never automatically retry an ambiguous response. */
@@ -1204,5 +1309,11 @@ class PomodoroViewModel(app: Application) : AndroidViewModel(app) {
         /** 前 2 个分类（Work/MyOwn）固定槽位，与 Swift TopThreeManager.fixedSlotCategories 一致 */
         private const val FIXED_SLOT_CATEGORIES = 2
         private const val MAX_FIXED_TASKS = 3
+        // FIX2(D2): user-visible persistence failure messages.
+        private const val TOP_THREE_PERSIST_FAILED = "本地写入失败：Top3 任务数据未保存，重启后本次改动将丢失"
+        private const val SETTINGS_PERSIST_FAILED = "本地写入失败：设置未保存，重启后将恢复旧设置"
+        /** ambientSource 的栖时取值（与 Apple 端设置 JSON 一致）；其他值一律按 custom 处理 */
+        const val AMBIENT_SOURCE_QISHI = "qishi"
+        private const val QISHI_LIBRARY_UNAVAILABLE = "栖时场景库不可用（qishi_presets.json 缺失或为空）"
     }
 }
