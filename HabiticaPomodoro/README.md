@@ -1,28 +1,30 @@
 # Habitica Pomodoro (macOS + iOS + Android)
 
-一款原生番茄钟应用（macOS 菜单栏 + iOS / Android 客户端，共享同一套业务规则），深度集成 [Habitica](https://habitica.com)，并独创 **智能时间块（Block Mode）** 与 **每日三件事（Top 3）** 功能，帮你把一天组织成可执行、可回顾的节奏。
+一款原生番茄钟应用（macOS 菜单栏 + iOS / Android 客户端，目标是统一业务规则），深度集成 [Habitica](https://habitica.com)，并独创 **智能时间块（Block Mode）** 与 **每日三件事（Top 3）** 功能，帮你把一天组织成可执行、可回顾的节奏。
 
 基于 [ofekmiz/Habitica-Pomodoro-SiteKeeper](https://github.com/ofekmiz/Habitica-Pomodoro-SiteKeeper) Chrome 扩展的 macOS 原生重制与增强版。
 
-**双端数据同步**：Mac 与 iPhone/iPad 登录同一 Apple ID 时，通过 iCloud Drive 读写**同一批 JSON 数据文件**（`Documents/.habitica-pomodoro/`），设置、任务、时间块进度、历史全部双向同步；任务另经 Habitica 云端（todo + tag）跨端一致。
+**Mac ↔ iPhone 数据同步**：Mac 与 iPhone/iPad 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的 JSON 数据文件（含单独的植物记录），设置、任务、时间块进度、历史双向同步。Android 无法读取该 iCloud 目录；新版源码可经 Habitica todo 导入 Mac/iPhone 已上传、带日期与分类标记的 Top 3 任务，但无法同步纯本地任务、设置及种植历史。Android 新版尚未发布。
+
+> **源码与发布版不同**：当前制作 **v1.2.3 本地测试新版**，补齐三端业务功能，并修复独立审查确认的任务同步与授权回退问题。详见 [功能对齐验收清单](FEATURE_PARITY.md)。新版构建与修后终审尚在进行，本轮尚未提交或发布，不能把旧 Release 当作本轮功能产物。
 
 ## 功能特性
 
 ### 🍅 番茄钟核心
 - 菜单栏实时倒计时显示（与番茄数交替展示）
-- 点击圆圈开始 / 暂停 / 跳过休息 / 提前结束
+- 点击圆圈开始 / 暂停 / 继续；放弃为独立操作，暂停不会被记成失败
 - 自定义番茄时长、短休息、长休息、番茄组数量
 - 完成 / 失败自动同步 Habitica habit（+ / -）
 - 结束音效、环境音（雨声、鸟鸣、蟋蟀、钟声）
 
 ### 🧱 智能时间块 (Block Mode)
-- 将一天划分为 8 个时间块（时间段可自定义，默认 04:00 起每 3 小时一块）
+- 时间块数量可设为 1–24（默认 8 块，04:00 起每 3 小时一块），每块 1–12 个番茄；支持跨午夜时段
 - 每块设定目标（Block Goal）与任务清单
 - 可视化时间轴：横向卡片展示 B1–B8，当前块橙色高亮，支持 "Current" 按钮一键定位居中
 - 块内番茄进度追踪（如 4/6）；macOS 首页 B1–B8 的种植位：空圆点表示尚未种植，完成一个 Pomo 长一棵灌木 🌿，中途放弃或跳过显示枯萎 🥀；完成一个 combo 还会在同排末尾额外长一棵树 🌳（不替代灌木）
-- 种植记录按天保存在 `habitica_pomodoro_plants.json`，位于同一 iCloud Drive 数据目录；与时间块进度文件分开，旧版 iOS 写入进度时不会清除植物记录。当前仅 macOS 展示植物，iOS / Android 页面尚未加入种植位
+- 种植记录按天保存在 `habitica_pomodoro_plants.json`，位于 Mac/iPhone 共用的 iCloud Drive 数据目录；与时间块进度文件分开，旧版 iOS 写入进度时不会清除植物记录。当前仓库源码中 iOS 和 Android 均已加入种植位，已发布的旧版移动端尚未包含此更新
 - 块完成自动 Habitica 奖励 + 休息建议
-- 智能提醒：块开始前 5 分钟提醒、块进度冲刺提醒（可配置）
+- 智能提醒：块开始前提醒（提前 1–60 分钟可配）、块进度冲刺提醒
 - 每日块记录持久化，支持历史回看
 
 ### ⭐ Top 3 — 每日最重要的三件事
@@ -45,8 +47,8 @@
 
 ### ☁️ 数据存储与同步
 - 所有数据以 JSON 文件存储于 `~/Documents/.habitica-pomodoro/`（隐藏文件夹）
-- 借助 iCloud Drive「桌面与文稿」同步能力，自动在多设备间同步，无需登录授权、无需开发者账号
-- UserDefaults 本地双备份，数据永不丢失
+- Mac 借助 iCloud Drive「桌面与文稿」同步；iPhone 需先在应用内授权同一父目录。无需付费开发者账号，不代表 Android 可以共享该目录
+- Mac/iOS 的 UserDefaults 提供本机兜底备份；文件同步并不保证无冲突，同时在多台设备修改同一文件仍可能按最后写入覆盖
 
 ### 📊 统计
 - 每日番茄数 / 专注时长直方图
@@ -113,9 +115,9 @@ bash build_ios.sh --no-install # 仅编译
 打开 App → **Settings → iCloud Drive 同步 → 选择 iCloud Drive 文件夹…** → 在文件选择器里选 **iCloud Drive → Documents**
 
 - `.habitica-pomodoro` 是隐藏文件夹，iOS 的「文件」App 看不到它，**只需选它的父目录**（选 iCloud Drive 根或 Documents 都可以，App 会自动定位）
-- 连接成功后会显示「✅ 已找到 5 个数据文件，与 Mac 版共用同一份数据」
+- 连接成功后显示找到的数据文件数量；新版统一发现七类文件，植物和番茄统计使用独立 JSON 文件，尚未产生某类记录时对应文件可能尚不存在
 - Mac 端需已开启 iCloud「桌面与文稿」同步（系统设置 → Apple ID → iCloud → iCloud 云盘）
-- 不连接也能用：数据存本机沙箱，任务仍通过 Habitica 云端跨端同步
+- 不连接 iCloud 也能用：数据存 iOS 本机沙箱；已配置 Habitica 时，本机新建任务仍可上传为 todo
 
 ## 安装 — Android
 
@@ -124,9 +126,10 @@ bash build_ios.sh --no-install # 仅编译
 3. 打开 App → 设置 → 填写 Habitica User ID 与 API Token
 
 - APK 为 debug 签名构建（开源侧载分发，功能与正式签名无差异），无 7 天过期问题
-- 任务数据经 Habitica 云端与 Mac / iPhone 互通；本机设置与番茄历史存应用私有目录，随 Android 云备份迁移
+- Android 新版源码的 Task 页可手动刷新 Habitica todo，并在启动、返回前台或更换账号后自动尝试导入 **Mac/iPhone 已上传且备注包含应用专用日期、分类标记** 的任务；通过 Habitica ID 合并标题与完成状态，不覆盖本机离线任务。纯本地任务及其他 Habitica todo 不会被导入；此在线同步尚未使用真实账号端到端验证
+- Android 的设置/历史/植物保存在本机，不能通过 iCloud Drive 与 Mac/iPhone 同步
 - Android 无法访问 iCloud Drive，因此 Mac↔iPhone 的 iCloud 文件同步不适用于 Android（平台限制）
-- Android 端功能为 MVP：番茄计时 + Task 三件事 + Role 角色页（无时间块/统计图）
+- 当前仓库源码包含更新后的 Android 时间块/种植、Habits/Dailies 与历史功能；Release `v1.0.0-android` 仍是旧版 MVP，尚未上传新版 APK
 
 源码构建：
 
@@ -152,7 +155,7 @@ bash build_android.sh release    # release APK（无 keystore.properties 时用 
 |------|------|
 | ⌘1 – ⌘5 | 切换到 Pomo / Task / Habits / Dailies / Role |
 | ⌘⇧P | 启动 / 暂停番茄（进行中→暂停，已暂停→继续，空闲→启动） |
-| ⌥⌘P | 全局热键：激活番茄钟（应用不在前台也可用） |
+| ⌥⌘P | 全局热键：启动 / 暂停 / 继续（应用不在前台也可用） |
 
 ## 构建
 
@@ -160,11 +163,13 @@ bash build_android.sh release    # release APK（无 keystore.properties 时用 
 cd HabiticaPomodoro
 
 # macOS
-bash build.sh        # 产物: HabiticaPomodoro.app + HabiticaPomodoro-Installer.dmg（swiftc 直接编译，无需 Xcode 工程）
+bash build.sh        # swiftc Universal .app 输出 ~/Library/Caches/HabiticaPomodoroBuild/；DMG 留在本目录
 
 # iOS（需 Xcode + xcodegen）
 bash build_ios.sh    # 生成工程 → 编译 → 安装到 iPhone 17 模拟器；详见 iOS/README.md
 ```
+
+构建输出的 `.app` 位于 `~/Library/Caches/HabiticaPomodoroBuild/`，可用 `HABITICA_BUILD_OUTPUT` 指向其他**非 iCloud** 目录；不要运行旧的仓库内 `.app` 副本。iCloud FileProvider 会反复给包根附加 Finder 属性，DMG 封装不受该 `.app` 路径问题影响，仍输出 `HabiticaPomodoro-Installer.dmg`。
 
 ## License
 
