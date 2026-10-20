@@ -10,6 +10,14 @@ struct HabiticaPomodoroMobileApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabView()
+                .onAppear {
+                    #if DEBUG
+                    let args = ProcessInfo.processInfo.arguments
+                    if let index = args.firstIndex(of: "-previewTab"), index + 1 < args.count, let tab = Int(args[index + 1]) {
+                        AppTabState.shared.selectedTab = tab
+                    }
+                    #endif
+                }
         }
     }
 }
@@ -20,6 +28,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // 必须最先执行：解析 iCloud Drive 文件夹授权 bookmark，
         // 保证之后任何 Manager 首次初始化时 PomodoroDataDir.url 已指向 iCloud 目录
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let index = args.firstIndex(of: "-isolatedDataDirectory"), index + 1 < args.count {
+            PomodoroDataDir.isolatedDirectory = URL(fileURLWithPath: args[index + 1])
+        }
+        #endif
         _ = ICloudFolderGrant.shared
         // DEBUG 构建支持 -grantFolder <path> 启动参数授权（自动化验证用）
         ICloudFolderGrant.shared.handleLaunchArguments()
@@ -34,14 +48,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // 初始化 Habitica 任务与今日计数
         Task { await PomodoroEngine.shared.initHabiticaTasks() }
         PomodoroEngine.shared.loadTodayCount()
+        BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
 
         // 回前台重同步：计时器校正 + 检测 iCloud 是否同步来了 Mac 端的新数据
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { _ in
+            ICloudFolderGrant.shared.syncFromCloudIfNeeded()
             PomodoroEngine.shared.resyncAfterForeground()
             PomodoroEngine.shared.loadTodayCount()
-            ICloudFolderGrant.shared.syncFromCloudIfNeeded()
+            Task { await TopThreeManager.shared.synchronize(settings: SettingsManager.shared.settings) }
+            BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+            BlockNotificationManager.shared.checkReminders(settings: SettingsManager.shared.settings)
         }
         return true
     }
@@ -60,13 +78,21 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: $tabState.selectedTab) {
-            MobilePomoView()
+            NavigationStack { MobilePomoView() }
                 .tabItem { Label("Pomo", systemImage: "timer") }
                 .tag(0)
 
-            TopThreeView()
+            TopThreeView().padding(.horizontal, 16)
                 .tabItem { Label("Task", systemImage: "star.fill") }
                 .tag(1)
+
+            HabiticaHabitsView()
+                .tabItem { Label("Habits", systemImage: "plusminus.circle") }
+                .tag(2)
+
+            HabiticaDailiesView()
+                .tabItem { Label("Dailies", systemImage: "checkmark.square") }
+                .tag(3)
 
             HabiticaProfileView()
                 .tabItem { Label("Role", systemImage: "person.crop.circle") }

@@ -32,8 +32,8 @@ final class ICloudFolderGrant: ObservableObject {
     private init() {
         resolveStoredBookmark()
         // 本地写入钩子：刷新基线，避免把自己的写入误判为云端变更
-        PomodoroDataDir.onLocalWrite = { [weak self] in
-            self?.refreshBaseline()
+        PomodoroDataDir.onLocalWrite = { [weak self] fileName in
+            self?.noteLocalWrite(fileName)
         }
     }
 
@@ -41,13 +41,7 @@ final class ICloudFolderGrant: ObservableObject {
 
     var isConnected: Bool { grantedRoot != nil }
 
-    private static let dataFileNames = [
-        "habitica_pomodoro_settings.json",
-        "habitica_pomodoro_block_progress.json",
-        "habitica_pomodoro_block_history.json",
-        "habitica_pomodoro_daily_blocks.json",
-        "habitica_pomodoro_top_three.json",
-    ]
+    private static let dataFileNames = PomodoroDataDir.dataFileNames
 
     /// 数据文件夹：在授权目录内定位 `.habitica-pomodoro`。
     ///
@@ -60,35 +54,13 @@ final class ICloudFolderGrant: ObservableObject {
     /// 4. 都不匹配才在 <root>/.habitica-pomodoro 新建
     var dataFolderURL: URL? {
         guard let root = grantedRoot else { return nil }
-        let dir = Self.resolveDataFolder(under: root, fm: fm)
+        let dir = PomodoroDataDir.resolveDataFolder(under: root, fm: fm)
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
     }
 
-    private static func resolveDataFolder(under root: URL, fm: FileManager) -> URL {
-        let folder = PomodoroDataDir.folderName
-        let inRoot = root.appendingPathComponent(folder)
-        let inDocuments = root.appendingPathComponent("Documents").appendingPathComponent(folder)
-
-        func hasData(_ url: URL) -> Bool {
-            dataFileNames.contains { fm.fileExists(atPath: url.appendingPathComponent($0).path) }
-        }
-        // 1. 已有数据者优先
-        if hasData(inRoot) { return inRoot }
-        if hasData(inDocuments) { return inDocuments }
-        // 2. 父级本身就是 Documents
-        if root.lastPathComponent == "Documents" { return inRoot }
-        // 3. 父级是 iCloud Drive 根且含 Documents 子目录 → 对齐 macOS 路径
-        var isDir: ObjCBool = false
-        let docsDir = root.appendingPathComponent("Documents")
-        if fm.fileExists(atPath: docsDir.path, isDirectory: &isDir), isDir.boolValue {
-            return inDocuments
-        }
-        // 4. 兜底
-        return inRoot
-    }
 
     /// 数据目录里已存在的数据文件数量（用于 UI 反馈"是否接上了 Mac 的数据"）
     @Published private(set) var dataFileCount: Int = 0
@@ -104,7 +76,9 @@ final class ICloudFolderGrant: ObservableObject {
     /// 数据目录的可读描述，如 "iCloud Drive/Documents/.habitica-pomodoro"
     var dataFolderDescription: String {
         guard let dir = dataFolderURL else { return "—" }
-        return "\(rootDisplayName)/\(dir.lastPathComponent)"
+        guard let root = grantedRoot else { return "—" }
+        let suffix = dir.path.hasPrefix(root.path) ? String(dir.path.dropFirst(root.path.count)) : "/" + dir.lastPathComponent
+        return rootDisplayName + suffix
     }
 
     private func refreshStatus() {
@@ -143,6 +117,7 @@ final class ICloudFolderGrant: ObservableObject {
                                                       includingResourceValuesForKeys: nil,
                                                       relativeTo: nil)
             UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
+            if let previous = grantedRoot { previous.stopAccessingSecurityScopedResource() }
             grantedRoot = pickedURL
             isStale = false
             refreshStatus()
@@ -204,7 +179,6 @@ final class ICloudFolderGrant: ObservableObject {
             print("[iCloud] resolve bookmark 失败: \(error)")
         }
         refreshStatus()
-        refreshBaseline()
     }
 
     /// bookmark 失效后重新生成（用当前仍可访问的 URL 刷新 bookmark）
@@ -231,6 +205,7 @@ final class ICloudFolderGrant: ObservableObject {
             print("[iCloud] 启动参数授权成功: \(url.path)")
         } else {
             revoke()
+            reloadAllManagers()
             print("[iCloud] 启动参数授权失败: \(path)")
         }
         #endif
@@ -239,55 +214,22 @@ final class ICloudFolderGrant: ObservableObject {
     // MARK: - 远端变更检测（iCloud 同步下来 Mac 端的修改）
     //
     // iOS 沙箱内无法订阅 iCloud Drive 文件的推送变更，采用回前台轮询：
-    // 对比数据目录 5 个 JSON 的 (修改时间, 大小) 快照，与基线不同则说明
+    // 对比数据目录全部 JSON 的 (修改时间, 大小) 快照，与基线不同则说明
     // Mac 端写入已经过 iCloud 同步下来，触发全部 Manager 重载。
     // 本地写入会通过 noteLocalWrite 钩子刷新基线，不会被误判。
     // （数据文件清单见上方 dataFileNames）
 
-    private var baselineSnapshot: [String: (mtime: Date, size: Int64)] = [:]
-
-    private func snapshot() -> [String: (mtime: Date, size: Int64)] {
-        guard let dir = dataFolderURL else { return [:] }
-        var snap: [String: (mtime: Date, size: Int64)] = [:]
-        for name in Self.dataFileNames {
-            let url = dir.appendingPathComponent(name)
-            if let attrs = try? fm.attributesOfItem(atPath: url.path),
-               let mtime = attrs[.modificationDate] as? Date,
-               let size = attrs[.size] as? NSNumber {
-                snap[name] = (mtime, size.int64Value)
-            }
-        }
-        return snap
+    /// The shared writer already consumed this file's exact bytes. Never acknowledge any other
+    /// file here (a Settings write must not hide an unread Histogram update).
+    func noteLocalWrite(_ fileName: String) {
+        guard Self.dataFileNames.contains(fileName) else { return }
+        refreshStatus()
     }
 
-    /// 本地写入后刷新基线（PomodoroDataDir.noteLocalWrite → 这里）
-    func refreshBaseline() {
-        baselineSnapshot = snapshot()
-    }
-
-    /// 回前台检查：iCloud 是否同步来了新数据。有变更则重载全部 Manager。
     func syncFromCloudIfNeeded() {
         guard isConnected else { return }
-        let current = snapshot()
-        var changed = false
-        for name in Self.dataFileNames {
-            let now = current[name]
-            let base = baselineSnapshot[name]
-            switch (now, base) {
-            case let (n?, b?):
-                // mtime 或大小变了即视为远端修改（1 秒容差避免亚秒抖动）
-                if abs(n.mtime.timeIntervalSince(b.mtime)) > 1.0 || n.size != b.size { changed = true }
-            case (.some, .none):
-                changed = true   // 新出现的文件（如 Mac 端首次生成）
-            default:
-                break            // 消失/都没有：不触发（删除场景由各自 load 回退兜底）
-            }
-        }
-        if changed {
-            print("[iCloud] 检测到云端数据变更，重新加载")
-            reloadAllManagers()
-        }
-        baselineSnapshot = current
+        PomodoroFileChanges.shared.syncFromDiskIfNeeded()
+        refreshStatus()
     }
 
     // MARK: - 连通性自检
@@ -314,6 +256,10 @@ final class ICloudFolderGrant: ObservableObject {
         SettingsManager.shared.reload()
         BlockProgressManager.shared.reload()
         TopThreeManager.shared.reload()
-        refreshBaseline()
+        PlantJournal.shared.reload()
+        HistogramManager.shared.reload()
+        PomodoroEngine.shared.loadTodayCount()
+        BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+        refreshStatus()
     }
 }

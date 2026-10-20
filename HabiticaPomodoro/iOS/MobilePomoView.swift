@@ -5,6 +5,11 @@ struct MobilePomoView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject private var api = HabiticaAPI.shared
+    @State private var refreshingHabitica = false
+    @State private var confirmAbandon = false
+    @State private var previewHistory = false
+    @State private var previewBlock: Int?
 
     private var settings: UserSettings { settingsManager.settings }
 
@@ -63,29 +68,50 @@ struct MobilePomoView: View {
 
                     controlButton(
                         systemImage: "forward.fill",
-                        label: "跳过休息",
+                        label: "跳到休息",
                         color: .orange,
-                        disabled: !(engine.phase == .pomodoro && !engine.isFrozen)
+                        disabled: engine.phase != .pomodoro
                     ) {
                         engine.skipToBreak()
                     }
 
                     controlButton(
                         systemImage: "xmark.circle.fill",
-                        label: "结束",
+                        label: engine.phase == .pomodoro ? "放弃" : "结束",
                         color: .red,
-                        disabled: !(engine.phase == .breakTime || engine.phase == .breakExtension)
+                        disabled: !(engine.phase == .pomodoro || engine.phase == .breakTime || engine.phase == .breakExtension)
                     ) {
-                        engine.reset()
+                        if engine.phase == .pomodoro {
+                            confirmAbandon = true
+                        } else {
+                            engine.reset()
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
 
+                if engine.phase == .idle && !engine.isRunning {
+                    Menu {
+                        ForEach([1, 5, 15, 30], id: \.self) { minutes in
+                            Button("\(minutes) 分钟") { engine.takeBreak(duration: minutes) }
+                        }
+                    } label: { Label("自选休息", systemImage: "cup.and.saucer") }
+                }
+
                 // 时间块进度（开启 Block Mode 时）
                 if settings.enableBlockMode {
                     Divider().padding(.horizontal, 24)
+                    MobileBlockTimelineView()
                     MobileBlockProgressView()
                 }
+
+                NavigationLink {
+                    MobileHistoryView()
+                } label: {
+                    Label("专注统计与历史", systemImage: "chart.bar.xaxis")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 20)
 
                 // Habitica 状态
                 if settings.connectHabitica {
@@ -98,18 +124,45 @@ struct MobilePomoView: View {
                         Label(String(format: "%.0f", engine.habiticaHp), systemImage: "heart.fill")
                             .foregroundColor(.red)
                         Button {
-                            Task { await engine.refreshHabitica() }
+                            refreshingHabitica = true
+                            Task { @MainActor in
+                                await engine.refreshHabitica()
+                                refreshingHabitica = false
+                            }
                         } label: {
                             Image(systemName: "arrow.clockwise")
                         }
                         .buttonStyle(.borderless)
+                        .disabled(refreshingHabitica)
                     }
                     .font(.subheadline)
+                    if let error = api.lastError { Text(error).font(.caption).foregroundColor(.orange).padding(.horizontal, 20) }
                 }
             }
             .padding(.bottom, 24)
         }
         .background(Color.surfaceBackground)
+        .navigationTitle("Pomo")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("放弃当前番茄？未完成不计数，并中断组合。", isPresented: $confirmAbandon) {
+            Button("放弃", role: .destructive) { engine.pomodoroInterrupted(breakStreak: true) }
+        }
+        .onAppear {
+            blockManager.updateBlockIndexFromTime(settings: settings)
+            #if DEBUG
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-previewHistory") { previewHistory = true }
+            if let i = args.firstIndex(of: "-previewBlock"), i + 1 < args.count, let block = Int(args[i + 1]), block >= 0, block < settings.blockCount { previewBlock = block }
+            #endif
+        }
+        .navigationDestination(isPresented: $previewHistory) { MobileHistoryView() }
+        .sheet(isPresented: Binding(get: { previewBlock != nil }, set: { if !$0 { previewBlock = nil } })) {
+            if let index = previewBlock { NavigationStack { MobileBlockEditorView(blockIndex: index) } }
+        }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            blockManager.updateBlockIndexFromTime(settings: settings)
+            engine.loadTodayCount()
+        }
     }
 
     // MARK: - 子组件
@@ -151,7 +204,7 @@ struct MobilePomoView: View {
         case .pomodoro:       return "专注中 · 点击圆圈暂停"
         case .breakTime:      return "休息中"
         case .breakExtension: return "休息延长中"
-        case .manualBreak:    return "完成！点击开始下一个番茄"
+        case .manualBreak:    return "完成！点击圆圈开始休息"
         case .idle:           return "点击圆圈开始番茄"
         }
     }
@@ -170,11 +223,12 @@ struct MobilePomoView: View {
 struct MobileBlockProgressView: View {
     @ObservedObject var blockManager = BlockProgressManager.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject var plantJournal = PlantJournal.shared
+    @State private var selectedBlock: Int?
 
     private var settings: UserSettings { settingsManager.settings }
 
     var body: some View {
-        blockManager.updateBlockIndexFromTime(settings: settings)
         let progress = blockManager.getTodayBlockProgress(settings: settings)
         let currentIdx = blockManager.blockProgress.currentBlockIndex
 
@@ -184,6 +238,10 @@ struct MobileBlockProgressView: View {
 
             ForEach(0..<settings.blockCount, id: \.self) { i in
                 let isCurrent = (i == currentIdx)
+                Button {
+                    selectedBlock = i
+                } label: {
+                VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text("B\(i + 1)")
                         .font(.caption.monospaced())
@@ -200,14 +258,39 @@ struct MobileBlockProgressView: View {
                         .foregroundColor(isCurrent ? .white : .primary)
 
                     Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(isCurrent ? .white : .secondary)
+                }
 
-                    // 番茄圆点
-                    HStack(spacing: 3) {
+                    // 种植槽与 Mac 共用 PlantJournal：完成/放弃/空槽，末尾为 combo 树。
+                    ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        let attempts = plantJournal.plants(blockIndex: i, completed: pomoCount(progress, i))
+                        let visible = Array(attempts.suffix(settings.blockPomoCount))
                         ForEach(0..<settings.blockPomoCount, id: \.self) { d in
-                            Circle()
-                                .fill(d < pomoCount(progress, i) ? Color.green : (isCurrent ? Color.white.opacity(0.35) : Color.gray.opacity(0.3)))
-                                .frame(width: 7, height: 7)
+                            if d < visible.count {
+                                Text(visible[d] == .shrub ? "🌿" : "🥀")
+                                    .accessibilityLabel(visible[d] == .shrub ? "灌木" : "枯萎")
+                            } else {
+                                Circle().strokeBorder(isCurrent ? Color.white.opacity(0.7) : Color.secondary.opacity(0.4), lineWidth: 1)
+                                    .frame(width: 7, height: 7)
+                                    .frame(width: 14, height: 16)
+                                    .accessibilityLabel("空种植位")
+                            }
                         }
+                        Rectangle().fill(Color.secondary.opacity(0.4)).frame(width: 1, height: 12)
+                        let trees = plantJournal.treeCount(blockIndex: i)
+                        if trees > 0 {
+                            Text("🌳" + (trees > 1 ? "×\(trees)" : ""))
+                                .accessibilityLabel("种树 \(trees) 棵")
+                        } else {
+                            Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1)
+                                .frame(width: 7, height: 7).frame(width: 14, height: 16)
+                                .accessibilityLabel("空 combo 位")
+                        }
+                    }
+                    .font(.system(size: 11))
                     }
                 }
                 .padding(.horizontal, 10)
@@ -216,9 +299,19 @@ struct MobileBlockProgressView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(isCurrent ? Color.orange : Color.gray.opacity(0.08))
                 )
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 16)
+        .sheet(isPresented: Binding(
+            get: { selectedBlock != nil },
+            set: { if !$0 { selectedBlock = nil } }
+        )) {
+            if let index = selectedBlock {
+                NavigationStack { MobileBlockEditorView(blockIndex: index) }
+            }
+        }
     }
 
     private func pomoCount(_ progress: [Int], _ i: Int) -> Int {
