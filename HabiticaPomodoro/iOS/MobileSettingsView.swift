@@ -109,10 +109,10 @@ struct MobileSettingsView: View {
                         }
                         Button("试听随机场景") {
                             if let preset = QishiSceneStore.randomPreset(excluding: nil) {
-                                audio.playQishiScene(preset, volume: sm.settings.ambientSoundVolume)
+                                audio.playQishiPreview(preset, volume: sm.settings.ambientSoundVolume)
                             }
                         }
-                        Button("停止试听") { audio.stopQishi() }
+                        Button("停止试听") { audio.stopPreview() }
                     } else {
                         Picker("环境音", selection: $sm.settings.ambientSound) {
                             ForEach(AudioManager.allAmbientOptions, id: \.self) { name in
@@ -168,6 +168,7 @@ struct MobileSettingsView: View {
                 Button("清空", role: .destructive) { HistogramManager.shared.clear() }
             }
             .onDisappear { audio.stopPreview() }
+            .onChange(of: sm.settings.ambientSource) { _ in audio.stopPreview() }
             .onChange(of: sm.settings.enableBlockMode) { enabled in
                 if enabled && sm.settings.blockStartReminder {
                     BlockNotificationManager.shared.requestPermissionIfNeeded()
@@ -213,19 +214,7 @@ struct ICloudSyncSection: View {
             }
 
             Button("立即保存全部数据") {
-                PomodoroFileChanges.shared.syncFromDiskIfNeeded()
-                var failedFiles: [String] = []
-                if !SettingsManager.shared.save() { failedFiles.append("habitica_pomodoro_settings.json") }
-                if !BlockProgressManager.shared.saveProgress() { failedFiles.append("habitica_pomodoro_block_progress.json") }
-                if !BlockProgressManager.shared.saveHistory() { failedFiles.append("habitica_pomodoro_block_history.json") }
-                if !BlockProgressManager.shared.saveDailyBlocks() { failedFiles.append("habitica_pomodoro_daily_blocks.json") }
-                if !TopThreeManager.shared.save() { failedFiles.append("habitica_pomodoro_top_three.json") }
-                if !PlantJournal.shared.save() { failedFiles.append("habitica_pomodoro_plants.json") }
-                if !HistogramManager.shared.save() { failedFiles.append("habitica_pomodoro_histogram.json") }
-                alertMessage = failedFiles.isEmpty
-                    ? "Saved：全部数据已保存到当前数据目录。"
-                    : "以下文件未保存：\n" + failedFiles.joined(separator: "\n")
-                showAlert = true
+                PomodoroFileChanges.shared.syncFromDiskIfNeeded { saveAllDataAfterSync() }
             }
             Text("文件级最后写入生效；iCloud 系统负责传送文件，在线 Habitica 不会同步本机专注历史。")
                 .font(.caption2).foregroundColor(.secondary)
@@ -302,6 +291,21 @@ struct ICloudSyncSection: View {
             }
             Button("取消", role: .cancel) {}
         }
+    }
+
+    private func saveAllDataAfterSync() {
+        var failedFiles: [String] = []
+        if !SettingsManager.shared.save() { failedFiles.append("habitica_pomodoro_settings.json") }
+        if !BlockProgressManager.shared.saveProgress() { failedFiles.append("habitica_pomodoro_block_progress.json") }
+        if !BlockProgressManager.shared.saveHistory() { failedFiles.append("habitica_pomodoro_block_history.json") }
+        if !BlockProgressManager.shared.saveDailyBlocks() { failedFiles.append("habitica_pomodoro_daily_blocks.json") }
+        if !TopThreeManager.shared.save() { failedFiles.append("habitica_pomodoro_top_three.json") }
+        if !PlantJournal.shared.save() { failedFiles.append("habitica_pomodoro_plants.json") }
+        if !HistogramManager.shared.save() { failedFiles.append("habitica_pomodoro_histogram.json") }
+        alertMessage = failedFiles.isEmpty
+            ? "Saved：全部数据已保存到当前数据目录。"
+            : "以下文件未保存：\n" + failedFiles.joined(separator: "\n")
+        showAlert = true
     }
 }
 

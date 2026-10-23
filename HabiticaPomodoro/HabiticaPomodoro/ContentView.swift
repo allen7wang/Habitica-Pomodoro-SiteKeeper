@@ -97,9 +97,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        PomodoroFileChanges.shared.syncFromDiskIfNeeded()
-        PomodoroEngine.shared.resyncAfterForeground()
-        BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+        PomodoroEngine.shared.resyncAfterForeground {
+            BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+        }
     }
 
     // 供快捷键使用：确保主窗口可见
@@ -469,6 +469,7 @@ struct SettingsView: View {
         }
         .frame(width: 530, height: 630)
         .onDisappear { am.stopPreview() }
+        .onChange(of: sm.settings.ambientSource) { _ in am.stopPreview() }
         .confirmationDialog("重置当前块的完成数？历史种植记录保留。",
                             isPresented: $showResetBlockConfirm, titleVisibility: .visible) {
             Button("重置当前块", role: .destructive) {
@@ -523,10 +524,10 @@ struct SettingsView: View {
                         HStack {
                             Button("试听随机场景") {
                                 if let preset = QishiSceneStore.randomPreset(excluding: nil) {
-                                    am.playQishiScene(preset, volume: sm.settings.ambientSoundVolume)
+                                    am.playQishiPreview(preset, volume: sm.settings.ambientSoundVolume)
                                 }
                             }
-                            Button("停止试听") { am.stopQishi() }
+                            Button("停止试听") { am.stopPreview() }
                         }
                     } else {
                         pickerRow("Ambient sound", selection: $sm.settings.ambientSound, options: AudioManager.allAmbientOptions)
@@ -794,7 +795,10 @@ struct SettingsView: View {
     }
     
     private func syncAllData() {
-        PomodoroFileChanges.shared.syncFromDiskIfNeeded()
+        PomodoroFileChanges.shared.syncFromDiskIfNeeded { saveAllDataAfterSync() }
+    }
+
+    private func saveAllDataAfterSync() {
         var failedFiles: [String] = []
         if !SettingsManager.shared.save() { failedFiles.append("habitica_pomodoro_settings.json") }
         if !BlockProgressManager.shared.saveProgress() { failedFiles.append("habitica_pomodoro_block_progress.json") }

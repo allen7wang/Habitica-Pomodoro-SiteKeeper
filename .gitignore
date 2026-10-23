@@ -194,6 +194,8 @@ ModelManifest.xml
 
 # iOS (xcodegen 生成，不入库)
 HabiticaPomodoro/HabiticaPomodoroMobile.xcodeproj/
+# 本地 agent 计划/草稿，不入库
+.hermes/
 # 遗留的半成品工程目录（由 project.yml + xcodegen 取代）
 HabiticaPomodoro/HabiticaPomodoro.xcodeproj/
 HabiticaPomodoro/TodayTasksWidget/TodayTasksWidget.xcodeproj/

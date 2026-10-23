@@ -32,10 +32,13 @@ final class PlantJournal: ObservableObject {
 
     // Folder-grant and cloud changes must replace the in-memory journal without writing it back.
     func reload() {
-        if let data = try? Data(contentsOf: fileURL),
+        let url = fileURL
+        let acknowledge = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: url)
+        if let data = try? PomodoroFileChanges.shared.readData(from: url),
            let saved = try? JSONDecoder().decode([String: PlantDay].self, from: data) {
             days = saved
-            PomodoroFileChanges.shared.consume(fileURL, data: data)
+            PomodoroFileChanges.shared.consume(url, data: data)
+            acknowledge()
         } else if let data = UserDefaults.standard.data(forKey: backupKey),
                   let saved = try? JSONDecoder().decode([String: PlantDay].self, from: data) {
             days = saved
@@ -105,6 +108,7 @@ final class PlantJournal: ObservableObject {
 
     @discardableResult
     func save() -> Bool {
+        PomodoroFileChanges.shared.noteLocalMutation(fileURL)
         do {
             let data = try JSONEncoder().encode(days)
             UserDefaults.standard.set(data, forKey: backupKey)

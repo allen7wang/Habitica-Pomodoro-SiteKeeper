@@ -81,7 +81,7 @@ final class ICloudFolderGrant: ObservableObject {
         return rootDisplayName + suffix
     }
 
-    private func refreshStatus() {
+    func refreshStatus() {
         guard grantedRoot != nil else {
             dataFileCount = 0
             statusText = "未连接"
@@ -118,6 +118,7 @@ final class ICloudFolderGrant: ObservableObject {
                                                       relativeTo: nil)
             UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
             if let previous = grantedRoot { previous.stopAccessingSecurityScopedResource() }
+            PomodoroFileChanges.shared.noteDirectoryChange()
             grantedRoot = pickedURL
             isStale = false
             refreshStatus()
@@ -138,6 +139,7 @@ final class ICloudFolderGrant: ObservableObject {
         if let root = grantedRoot {
             root.stopAccessingSecurityScopedResource()
         }
+        PomodoroFileChanges.shared.noteDirectoryChange()
         grantedRoot = nil
         isStale = false
         refreshStatus()

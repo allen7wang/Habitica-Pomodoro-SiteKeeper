@@ -2,6 +2,8 @@
 
 macOS 版 Habitica Pomodoro 的 iOS 客户端，与 Mac 版共享同一套核心代码（引擎 / 数据 / Habitica API / 视图），通过 `#if os(iOS)` 与跨平台兼容层适配移动端。
 
+> **当前状态（2026-10-23）**：已发布 `v1.2.5-ios`，下载物为 `HabiticaPomodoro-iOS-1.2.5-unsigned.ipa`，并非可直接安装的签名包。源码配置为 1.2.5/build 4，包含共享文件读取与声音生命周期修复；本轮未安装到手机。当前结论以 [FEATURE_PARITY.md](../FEATURE_PARITY.md) 的最新日期记录为准，以下旧验证不替代真机验收。
+
 ## 数据同步（iCloud Drive 文件）
 
 仅授权共享目录后，iOS 才与 Mac 读写 iCloud Drive `Documents/.habitica-pomodoro/` 下的同一批 JSON。五个既有文件保存设置、块进度/历史和 Task；独立 `habitica_pomodoro_plants.json` 保存种植，新增独立 `habitica_pomodoro_histogram.json` 保存番茄数量和实际完成分钟。七类文件全部接入目录发现、保存、reload 与前台变更检测；未授权时数据在应用沙盒。
@@ -19,7 +21,7 @@ macOS 版 Habitica Pomodoro 的 iOS 客户端，与 Mac 版共享同一套核心
 - 未授权时回退 App 沙箱，仍可用；配置 Habitica 后任务有独立云端通道，但不代表专注/块/植物历史已同步。文件级最后写入生效，同时编辑可能覆盖。「立即保存全部数据」只写文件，传送由 iCloud 系统负责。
 - 本轮已用 scratch 探针验证选择 iCloud 根或其 Documents 父目录时，Histogram 单独存在也能发现同一数据目录；真实 fileImporter 授权、冷启动 bookmark、跨设备系统传送仍须真机人工验收。
 
-## 功能（当前源码，尚未发布新版 iOS Release）
+## 功能
 
 - **Pomo**：启动、暂停/继续、放弃/跳到休息、手动/自动短长休息与延长、空闲时 1/5/15/30 分钟自选休息；1–24 块的 timeline/Current、目标/跨午夜时段/任务编辑与预计番茄数；🌿 完成、🥀 放弃、🌳 combo、○ 空位；达标同一天同一块只记一次历史/奖励
 - **Task**：Work/MyOwn 各最多新增 3 条，Chores 不限；统一新增、修改标题、完成/取消、确认删除、分类改名；昨日只读及未完成任务顺延；todo/tag 出站、应用专用 dated Top3 todo 入站；普通 todo 不导入，失败保留本机，待上传修改/删除标记阻止旧响应覆盖。按 UID＋规范 HTTPS API 根保存每个账号的 UUID/远端映射/tag/待同步修改与删除队列，其他账号不执行这些操作；回切保留映射，同账号 Token 轮换不改变归属
@@ -27,6 +29,7 @@ macOS 版 Habitica Pomodoro 的 iOS 客户端，与 Mac 版共享同一套核心
 - **Role**：角色属性、成就、请求状态、刷新和失败提示；账号切换拒绝旧响应
 - **历史**：今天/累计/日均番茄与专注分钟/小时、近期图表、时间块及植物历史；旧统计从原 UserDefaults 备份迁移到独立 JSON，已有不可读文件不在初始化时覆盖
 - **Settings**：Habitica、计时/组合/计分、默认或自定义 Habit ID、短长休息消息提醒、块奖励/开始/冲刺提醒、真实打包音效/环境音/独立音量/预听、重置与分别清理、iCloud Drive 父目录授权；未实现的旧开关不显示但保留解码字段。自定义服务会收到凭据，只接受 HTTPS API 根地址，并禁止自动跟随重定向
+- **栖时声音**：自定义单轨或 73 场景随机混音；仅清单打包，音频从公开站流式，需要联网。本轮源码修复暂停/继续保持原播放资源，试听独立且离开设置时清理；真实流式与锁屏后台仍待设备验证
 
 ## 与 Mac 版的数据关系
 
@@ -50,6 +53,14 @@ SIM_NAME="iPhone Air" bash build_ios.sh   # 指定其他模拟器
 工程文件 `HabiticaPomodoroMobile.xcodeproj` 由 `project.yml`（xcodegen）生成，**不入库**；改文件列表请改 `project.yml`。
 
 ### 真机部署
+
+已配置 Xcode 免费签名环境后，在 `HabiticaPomodoro` 目录运行：
+
+```sh
+bash resign_ios.sh
+```
+
+脚本发现所有已连接、解锁的实体 iPhone，逐台构建签名 Release、校验 profile 后覆盖安装并尝试启动；不卸载或清数据。免费签名 7 天后需重跑。换签名团队可设置 `HABITICA_IOS_TEAM`。首次开发者模式与证书信任仍须在手机上确认；只想编译时不要运行此脚本。手动 Xcode 路径如下：
 
 1. `open HabiticaPomodoroMobile.xcodeproj`
 2. Target → Signing & Capabilities → Team 选你的 Apple ID（免费账号即可，7 天有效需重签）
@@ -89,13 +100,13 @@ HabiticaPomodoro/              # 与 Mac 版共享
 └── PlatformCompat.swift       # 跨平台兼容垫片
 ```
 
-## 本轮验证与手测清单
+## 验证边界与手测清单
 
-当前制作 **1.2.3 / build 2 本地测试版**；版本配置已更新，第三轮定向修复、新产物构建和独立审查尚在进行。下列旧构建/探针仅作前轮基线，不表示新版已完成验收。
+当前源码对应已发布 v1.2.5。Debug/Release 构建、离线逻辑回归、手机安装、UI、后台及 iCloud 传送分别记账，不能互相替代。
 
 实际完成 iOS Simulator Debug 构建、macOS arm64/x86_64 编译和 scratch 离线状态/持久化探针。早期专用模拟器已安装启动，Pomo 截图包含计时圈、控制、自选休息、历史入口和原生 More。后续详细页面验证遇到模拟器启动超时 / LaunchdSimError 111，**白屏不能证明 Settings 布局已验收**。
 
-本轮未提交或发布，没有真实 Habitica 账号、没有授权真实 iCloud 目录；探针只用离线模拟记录，不新增测试框架或仓库测试文件。按 `FEATURE_PARITY.md` 人工验收：
+Apple 离线夹具已固化在 [../fixtures/](../fixtures/README.md)：真实生产逻辑配隔离目录及音频 transport 替身，无真实账号或网络请求，不新增测试框架。共享改动要同时检查 Mac/iOS 构建；尚未执行的人工项保留下列清单：
 
 - [ ] 圆圈启动/暂停/继续；暂停休息后恢复仍是休息；放弃/跳过不计完成。
 - [ ] 手动/自动短休息、combo 长休息、自选休息；0 延长、延长后保留/清 combo。

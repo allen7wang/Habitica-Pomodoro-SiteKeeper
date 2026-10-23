@@ -1,6 +1,16 @@
 # 桌面与移动端功能对齐验收清单
 
-> 本轮目标：macOS、iOS、Android 的业务功能与记录规则一致，不要求把桌面布局机械复制到手机。当前正在实施，本文是验收标准，**不是全部已通过的验证报告**。本轮不包含手表端，不提交或发布版本。
+> macOS、iOS、Android 的业务功能与记录规则对齐，不要求机械复制桌面布局。三端 v1.2.5 已于 2026-10-23 发布，纳入 2026-10-22 的防卡顿、Apple 音频、回归与 CI 优化；界面视觉尚未改造，`sketches/fresh-ui/` 仅为设计预览。本文同时保留历次记录，旧日期的“尚未发布/待修”不代表现状，也**不是所有人工项已通过的声明**。不含手表端。
+
+## 当前状态索引（2026-10-23）
+
+| 状态 | 范围与边界 |
+|---|---|
+| 已公开 | Mac `v1.2.5`、iOS `v1.2.5-ios` 未签名 IPA、Android `v1.2.5-android` APK；包含 2026-10-22 防卡顿、Apple 音频与前台补记修复 |
+| 已安装 Mac | 2026-10-22 防卡顿热修 1.2.4/build 8；v1.2.5 尚未替换本机安装 |
+| 工作区 | 后台七文件重载、防覆盖、Apple 专注/试听资源隔离、离线回归、CI 依赖修正已随 v1.2.5 发布；界面视觉改造尚未开始 |
+| 待验收 | 长时间日常使用、真实音频/锁屏后台、Habitica 在线及账号切换、iCloud 跨设备系统传送；Android 无设备暂缓真机 |
+| 回归入口 | [Apple fixtures](fixtures/README.md)、[Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md)；离线绿不等于设备或线上绿 |
 
 ## 共同业务功能
 
@@ -91,3 +101,45 @@
   - 离线已验证 vs 需真机：设置解码/随机防重/延续/停止点清空/73 场景解析均离线断言；**流式出声、音频焦点、锁屏后台播放需真机**（未验证，如实记录）。
   - 坑：AGP `mergeDebugAssets` 在 iCloud 目录增量构建时对同一 assets 文件报 Duplicate resources（幻影重复，目录实际干净无 `._`/`.icloud` 文件）——`clean assembleDebug` 即恢复，33s 成功。
 - 版本 **1.2.4**（四处同步 bump）：macOS build 7、iOS build 3、Widget 1.2.4/7、Android versionCode 4。产物：Mac DMG 11MB（仓库内）、iOS 未签名 IPA SHA `a8f9b3b4…`、Android APK 25.3MB SHA `8d0ca88eaff03546069d76facfae6612de0f44c9069ab661b606427722b680b8`（1.2.4/code 4，assets 含 qishi_presets.json+14 mp3）。Mac 本机已替换安装 1.2.4 build 7（备份 20261020-193433），用户实测 qishi 试听通过（"mac上没有问题"）。
+- **Mac 无响应修复（2026-10-22，本地修复版 1.2.4 build 8，未提交/发布）**：
+  - 根因证据：系统 `/Library/Logs/DiagnosticReports/HabiticaPomodoro_2026-10-19-155800_Allens-MacBook-Pro.hang` 记录 1.2.3(6) 无响应 23.71 秒；主线程 `PomodoroFileChanges.startMonitoring → syncFromDiskIfNeeded → changedFileNames → Data(contentsOf:) → read → apfs_materialize_dataless_file_ext`。为既有云占位文件读取阻塞，不是该报告能证明的 Qishi 回归；本轮检查时 `/Applications` 实际为 1.2.2(5)，不以之前的装机记录代替当前核验。
+  - 修复：七文件轮询/回前台检测改串行后台读取不可变 Result 快照；主线程用预取字节重载（包括首次 manager 初始化），避免 reload 二次云读取。single-flight 覆盖发布及同步 Combine 回调；目录代次、读取代次和每个 manager 应用前的本地变更代次阻止过期结果覆盖；失败保存保留 dirty 路径直到实际写盘成功；块三文件作为一组，dirty/读取错误/坏 JSON 不走备份回写。手动保存全部在异步扫描 completion 后执行，保留先读后写顺序。没有关闭 iCloud 同步或改动 JSON schema。
+  - 实测：scratch 内从真实生产源提取的读延迟探针先 RED（主线程最大停顿 2.412s）再 GREEN（最终 0.029s）；真实六个生产 Swift 文件 + DEBUG isolatedDirectory/CFFIXED_USER_HOME 的隔离模型探针 **18 项断言通过**（最终主线程最大间隔 0.019s），覆盖七文件重载、无变化不发布、本地写竞争、坏 JSON 重试、20 请求合批/完成回调顺序、注入写权限失败后的 dirty 保留、块关联文件保护和发布期间回调重入。探针仅模拟慢文件 read，未强制操作真实云占位文件、未读取真实账号。
+  - 构建/审查：Mac universal arm64+x86_64、iOS Simulator 最终构建均 exit 0；主 App/Widget strict 签名通过，Qishi 资源仍在包内；最终只读 diff 独审未发现范围内阻断问题。Mac/Widget build 同步到 8，iOS 营销版本及 build 未改；Android 无改动。
+  - 本机已安装 1.2.4(8)，二进制 SHA256 `2240750238c3c81a4d5271aceb91acd3a75e3e74bdff5013da813752b45ebf79`；旧 1.2.2(5) 完整备份于 `~/Library/Caches/HabiticaPomodoroInstallBackups/20261022-165741-hang-fix/`。未清理业务数据、未强停计时、未自动启动主 App。
+  - 边界：这轮针对已证实的轮询读取阻塞；冷启动直接加载、显式保存/Histogram 读前写、iOS 授权目录元数据查询仍有既有同步 IO，不宣称消除了所有潜在卡顿。真实日常使用仍待用户复验。探针及构建日志暂存 `~/.hermes/cache/scratch/pomo-hang-20261022/`，不入发布物。
+
+## 优化完成与最终验证（2026-10-22，未提交/发布）
+
+- **CI**：修正 xcodegen 安装顺序及 Android SDK 显式包清单；新增 master push/PR，保留 tag/manual；构建前运行两端离线套件。父端复跑 actionlint + ShellCheck 退出 0，9 段 Bash 语法通过；明确产物校验和文件名，避免旧 SHA256SUMS 自包含。**未推送、未触发远端 Actions，不能称 hosted CI 已绿**。
+- **Apple 音频**：专注暂停保留场景、播放器与位置；自定义轨道同样复用。试听独立持有资源，不改专注场景或防重复历史；停止试听/离开设置/更换来源清理试听，新专注清理遗留试听。EOF 通知核实播放器归属后始终重置循环位置，暂停时不 play，避免“暂停刚好遇结尾”恢复后静音。
+- **前台和目录边界**：Mac/iOS 实际 activation body 统一走 Engine 异步恢复边界，先采纳磁盘快照再补结算；真实 scheduled Timer 同样受屏障保护。恢复令牌、phase revision、目录 generation 拦截重置/暂停/新阶段/A→B→A 后的旧回调，生产按完成时墙钟校时；恢复过程中换目录会暂停原阶段，避免后续 tick 自动写入新目录。失败写入的 dirty ownership 改为每路径 epoch，成功显式替换只确认被替换的旧 epoch，不清除新订阅者失败写入或 Histogram 尚未保存增量。
+- **审查闭环**：首轮 48 断言虽通过，独审仍发现上述前台先写、暂停 EOF、目录往返 dirty 残留三项边界。定向用例均先实际失败再修绿；修后由新上下文分别审查生产控制流和 fixtures/实际钩子提取，**两项复审均 passed，无安全或逻辑阻断**。静态审查不是实际设备运行验收。
+
+| 最终父端独立运行 | 结果 |
+|---|---|
+| `file_monitor` | 24 PASS，native delayed reads=7，最大主线程心跳间隔 0.064s |
+| `foreground_recovery` | 21 PASS，native delayed reads=9，最大主线程心跳间隔 0.030s |
+| `dirty_reload` | 14 PASS，七存储显式重载/失败写入/坏 JSON/订阅者重入 |
+| `qishi_audio` | 29 PASS，保留原断言并加强异步恢复、真实 EOF 状态模型 |
+| Apple 全套 | **4/4 cases，88 PASS，40 个编译输入指纹与当前源码一致**；原 48 断言未删减/弱化 |
+| Android 既有套件 | **36/36 PASS**，JDK 21、`--no-download`，本轮未改 Android 生产代码或重建 APK |
+| Mac + Widget | build.sh 退出 0，二者 arm64+x86_64、strict 签名通过；DMG CRC、只读挂载签名/二进制一致性通过 |
+| iOS Simulator | Debug 和 Release 均退出 0，未安装或启动模拟器/手机 |
+
+三份 Apple 应用及挂载 DMG 均核验 14 个自定义 MP3 + 73 场景/175 轨引用的真实 JSON，逐文件 SHA 与源码资源一致；包内未发现运行设置、数据库、凭据配置、fixtures 或 profile 文件。检查不读取真实账号设置，不能把文件清单检查夸大为对所有可能二进制秘密的形式证明。
+
+本轮未升版本：候选仍为 Mac/Widget **1.2.4 build 8**、iOS **1.2.4 build 3**。为避免与已安装的同版本防卡顿包混淆：
+- 最终候选 Mac 可执行文件 SHA-256：`192a32c9f7bbc6dc86cf6637310c0538764fd09d7433e05bef5a825c087c7204`。
+- 最终 `HabiticaPomodoro-Installer.dmg` SHA-256：`0cf831e7e83657333b604db0e9a640c4214a79cb96249d6f29f31a2763d4e784`。
+- `/Applications` 保持之前的防卡顿包，二进制 SHA-256 仍为 `2240750238c3c81a4d5271aceb91acd3a75e3e74bdff5013da813752b45ebf79`；本轮未替换、未启动或中断用户应用，也未更新手机。
+
+回归可从 [Apple fixtures](fixtures/README.md) / [Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md) 重跑。最终日志与 `artifacts.json` 暂存 `~/.hermes/cache/scratch/pomo-opt-20261022/verified-final/`，scratch 会被清理；本节保存本次摘要与产物身份。真实音频/EOF 听感、窗口/Tab 退出、锁屏后台、Habitica 在线和账号切换、FileProvider 传送、书签与安全作用域均未在本轮实测。A/B 测试仅操作合成 DEBUG 目录，不是用户目录迁移或真实授权验收；Android 真机因无设备继续暂缓。冷启动及部分显式保存的同步 I/O、文件级最后写入冲突仍是既有限制。
+
+## v1.2.5 发布记录（2026-10-23）
+
+- 版本：macOS **1.2.5 (9)**、Widget **1.2.5 (9)**、iOS **1.2.5 (4)**、Android **1.2.5 (versionCode 5)**。界面与 v1.2.4 相同，不含视觉改造；清新方向仅存于 `sketches/fresh-ui/` 预览。
+- 发布前回归：Apple fixtures **4 cases / 88 assertions PASS**（file_monitor 24、foreground_recovery 21、dirty_reload 14、qishi_audio 29）；Android **36/36 PASS**（JDK 21、`--no-download`）。
+- 产物核验：Mac universal arm64+x86_64、Widget 与 DMG 内 App 均 strict 签名通过，DMG 挂载版本 1.2.5/9；iOS IPA 版本 1.2.5/4；Android APK versionCode 5，含 15 个音频资源（14 MP3 + `qishi_presets.json`），debug 签名。三份包内未发现运行设置/凭据 JSON。
+- SHA-256：DMG `ed33c6c5f9418cc4526a09a00d50f4142c565e9d0e7a931e7bd5f57ba63f5261`；IPA `df9e6bd35bc9fa27070e2ce83829a40c20199b188853a5f40f2fae3a39e73a9e`；APK `b30bc8ddf52e44a9db48da67abfaba8e2970e0464ff7804fc54831be90ab3230`。
+- 边界：这三份产物没有安装到本机 Mac、手机或 Android 设备；真实 iCloud 传送、Habitica 在线链路、锁屏后台音频及长期使用仍未验收。Apple fixtures 与 Android 回归均为离线验证，不等于在线上/设备上通过。

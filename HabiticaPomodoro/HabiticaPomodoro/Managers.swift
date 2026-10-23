@@ -17,26 +17,34 @@ enum PomodoroDataDir {
         "habitica_pomodoro_histogram.json"
     ]
     #if DEBUG
-    static var isolatedDirectory: URL?
+    static var isolatedDirectory: URL? {
+        didSet {
+            if oldValue?.standardizedFileURL != isolatedDirectory?.standardizedFileURL {
+                PomodoroFileChanges.shared.noteDirectoryChange()
+            }
+        }
+    }
     #endif
 
-    static var url: URL {
+    /// Select the data location separately from Mac directory creation during polling.
+    static var resolvedURL: URL {
         #if DEBUG
-        if let isolated = isolatedDirectory {
-            try? FileManager.default.createDirectory(at: isolated, withIntermediateDirectories: true)
-            return isolated
-        }
+        if let isolated = isolatedDirectory { return isolated }
         #endif
         #if os(iOS)
         // iOS：用户通过文件选择器授权 iCloud Drive 目录后，数据落在
         // <授权目录>/.habitica-pomodoro（与 macOS 端 ~/Documents/.habitica-pomodoro 同一批文件）。
         // 未授权时回退 App 沙箱本地目录，保证 App 始终可用。
-        if let iCloudDir = ICloudFolderGrant.shared.dataFolderURL {
-            return iCloudDir
-        }
+        if let iCloudDir = ICloudFolderGrant.shared.dataFolderURL { return iCloudDir }
         #endif
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent(folderName)
+        return docs.appendingPathComponent(folderName)
+    }
+
+    static var url: URL {
+        // Reloads must use the captured directory without a second FileProvider access.
+        if let directory = PomodoroFileChanges.shared.prefetchedDirectory { return directory }
+        let dir = resolvedURL
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -74,12 +82,13 @@ enum PomodoroDataDir {
 
     /// Consume only the bytes actually written, never snapshot unrelated/unloaded cloud files.
     static func noteLocalWrite(_ fileName: String, data: Data) {
-        PomodoroFileChanges.shared.consume(fileURL(fileName), data: data)
+        PomodoroFileChanges.shared.noteLocalWrite(fileURL(fileName), data: data)
         onLocalWrite?(fileName)
     }
 
     // 一次性迁移：把旧的散落在 Documents 根目录的文件移入隐藏文件夹
     static func migrateOldFiles() {
+        if PomodoroFileChanges.shared.prefetchedDirectory != nil { return }
         #if DEBUG
         if isolatedDirectory != nil { return }
         #endif
@@ -100,33 +109,189 @@ enum PomodoroDataDir {
 /// mtimes: a failed decode stays detectable, including same-size updates within the same second.
 final class PomodoroFileChanges {
     static let shared = PomodoroFileChanges()
+    // Mutable monitor state and manager publication stay on the main thread. Only immutable
+    // URLs/results cross to the reader queue; a cloud download must never stall the UI run loop.
     private var consumed: [String: Data] = [:]
+    private var revision = 0
+    private var localMutationRevision = 0
+    private var dirtyPaths: [String: Int] = [:]
     private var pollTimer: Timer?
-    private var reloading = false
+    private let readerQueue = DispatchQueue(label: "com.hermes.habitica-pomodoro.file-reader", qos: .utility)
+    private var reading = false
+    private var completions: [() -> Void] = []
+    private var observedDirectory: String?
+    private var directoryGeneration = 0
+    private var prefetched: [String: Result<Data, Error>]?
+    private(set) var prefetchedDirectory: URL?
 
-    func consume(_ url: URL, data: Data) { consumed[url.standardizedFileURL.path] = data }
-
-    func changedFileNames() -> Set<String> {
-        Set(PomodoroDataDir.dataFileNames.filter { name in
-            let url = PomodoroDataDir.fileURL(name)
-            guard let data = try? Data(contentsOf: url) else { return false }
-            return consumed[url.standardizedFileURL.path] != data
-        })
+    struct DirectoryIdentity: Equatable {
+        let url: URL
+        let generation: Int
     }
 
-    func syncFromDiskIfNeeded() {
-        guard !reloading else { return }
-        reloading = true
-        defer { reloading = false }
-        let changed = changedFileNames()
-        if changed.contains("habitica_pomodoro_settings.json") { SettingsManager.shared.reload() }
-        if !changed.isDisjoint(with: ["habitica_pomodoro_block_progress.json", "habitica_pomodoro_block_history.json", "habitica_pomodoro_daily_blocks.json"]) {
+    /// Selection events invalidate A-B-A recovery too, even without an intervening scan.
+    func noteDirectoryChange() { directoryGeneration += 1 }
+
+    func directoryIdentity() -> DirectoryIdentity {
+        let directory = PomodoroDataDir.resolvedURL.standardizedFileURL
+        if observedDirectory != directory.path {
+            observedDirectory = directory.path
+            directoryGeneration += 1
+        }
+        return DirectoryIdentity(url: directory, generation: directoryGeneration)
+    }
+
+    func consume(_ url: URL, data: Data) {
+        consumed[url.standardizedFileURL.path] = data
+        revision += 1
+    }
+
+    /// Mark before attempting disk I/O. A failed save must keep newer in-memory state dirty.
+    func noteLocalMutation(_ url: URL) {
+        localMutationRevision += 1
+        dirtyPaths[url.standardizedFileURL.path] = localMutationRevision
+        revision += 1
+    }
+
+    func noteLocalWrite(_ url: URL, data: Data) {
+        dirtyPaths.removeValue(forKey: url.standardizedFileURL.path)
+        localMutationRevision += 1
+        consume(url, data: data)
+    }
+
+    /// Only a successful explicit replacement may discard the failed edit it replaced.
+    /// Capture before reading/publication; a synchronous subscriber can create a newer
+    /// failed save before acknowledgement. Scans/consume never clear dirty ownership.
+    func explicitReloadAcknowledgement(for url: URL) -> () -> Void {
+        let path = url.standardizedFileURL.path
+        let dirtyRevision = dirtyPaths[path]
+        let explicit = prefetched == nil
+        return {
+            guard explicit, self.dirtyPaths[path] == dirtyRevision,
+                  PomodoroDataDir.resolvedURL.standardizedFileURL == url.deletingLastPathComponent().standardizedFileURL else { return }
+            self.dirtyPaths.removeValue(forKey: path)
+        }
+    }
+
+    /// A reload consumes the exact background-read bytes, not a second synchronous cloud read.
+    /// Failed/absent entries stay failed: never fall through to disk while applying a snapshot.
+    func readData(from url: URL) throws -> Data {
+        if let prefetched = prefetched {
+            guard let result = prefetched[url.standardizedFileURL.path] else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            return try result.get()
+        }
+        return try Data(contentsOf: url)
+    }
+
+    func fileExists(at url: URL) -> Bool {
+        if let result = prefetched?[url.standardizedFileURL.path] {
+            switch result {
+            case .success: return true
+            case .failure(let error):
+                let nsError = error as NSError
+                return !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError)
+            }
+        }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Single-flight asynchronous polling, also used at launch and foreground activation.
+    /// Explicit save-all callers wait for completion before writing their in-memory state.
+    func syncFromDiskIfNeeded(completion: (() -> Void)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.syncFromDiskIfNeeded(completion: completion) }
+            return
+        }
+        let directory = directoryIdentity().url
+        if let completion = completion { completions.append(completion) }
+        guard !reading else { return } // A slow download cannot queue an unbounded backlog.
+        reading = true
+        let requestedRevision = revision
+        let requestedDirectoryGeneration = directoryGeneration
+        readerQueue.async {
+            let snapshot = Dictionary(uniqueKeysWithValues: PomodoroDataDir.dataFileNames.map { name in
+                let url = directory.appendingPathComponent(name)
+                return (url.path, Result { try Data(contentsOf: url) })
+            })
+            DispatchQueue.main.async {
+                // Keep the request in flight through publication, including synchronous subscribers.
+                // A write/reload or a folder switch while reading invalidates the entire batch,
+                // including grouped block files. An A→B→A switch is not the original generation.
+                guard self.revision == requestedRevision,
+                      self.directoryGeneration == requestedDirectoryGeneration,
+                      PomodoroDataDir.resolvedURL.standardizedFileURL == directory else {
+                    self.reading = false
+                    self.syncFromDiskIfNeeded()
+                    return
+                }
+                let changed = Set(PomodoroDataDir.dataFileNames.filter { name in
+                    let path = directory.appendingPathComponent(name).path
+                    guard self.dirtyPaths[path] == nil, case .success(let data) = snapshot[path] else { return false }
+                    return self.consumed[path] != data
+                })
+                self.prefetched = snapshot
+                self.prefetchedDirectory = directory
+                let applyingMutationRevision = self.localMutationRevision
+                let isCurrent = {
+                    self.localMutationRevision == applyingMutationRevision &&
+                        self.directoryGeneration == requestedDirectoryGeneration &&
+                        PomodoroDataDir.resolvedURL.standardizedFileURL == directory
+                }
+                self.reload(changed: changed, isCurrent: isCurrent)
+                let invalidatedDuringPublication = !isCurrent()
+                self.prefetched = nil
+                self.prefetchedDirectory = nil
+                self.reading = false
+                if invalidatedDuringPublication {
+                    self.syncFromDiskIfNeeded()
+                    return
+                }
+                let callbacks = self.completions
+                self.completions.removeAll()
+                callbacks.forEach { $0() }
+            }
+        }
+    }
+
+    private func reload(changed: Set<String>, isCurrent: () -> Bool) {
+        if isCurrent(), changed.contains("habitica_pomodoro_settings.json") { SettingsManager.shared.reload() }
+        if isCurrent(),
+           !changed.isDisjoint(with: ["habitica_pomodoro_block_progress.json", "habitica_pomodoro_block_history.json", "habitica_pomodoro_daily_blocks.json"]),
+           canReloadBlocks() {
             BlockProgressManager.shared.reload()
         }
-        if changed.contains("habitica_pomodoro_top_three.json") { TopThreeManager.shared.reload() }
-        if changed.contains("habitica_pomodoro_plants.json") { PlantJournal.shared.reload() }
-        if changed.contains("habitica_pomodoro_histogram.json") { HistogramManager.shared.reload() }
-        // Successful manager decodes record exact bytes; no blanket baseline update here.
+        if isCurrent(), changed.contains("habitica_pomodoro_top_three.json") { TopThreeManager.shared.reload() }
+        if isCurrent(), changed.contains("habitica_pomodoro_plants.json") { PlantJournal.shared.reload() }
+        if isCurrent(), changed.contains("habitica_pomodoro_histogram.json") { HistogramManager.shared.reload() }
+        // Only successful manager decodes consume bytes; corrupt revisions remain retryable.
+    }
+
+    /// Block reload has migration/write side effects. A failed/corrupt or dirty companion must
+    /// not trigger its backup fallback and overwrite another member of the three-file group.
+    private func canReloadBlocks() -> Bool {
+        guard let directory = prefetchedDirectory, let prefetched = prefetched else { return false }
+        for name in ["habitica_pomodoro_block_progress.json", "habitica_pomodoro_block_history.json", "habitica_pomodoro_daily_blocks.json"] {
+            let path = directory.appendingPathComponent(name).path
+            guard dirtyPaths[path] == nil, let result = prefetched[path] else { return false }
+            switch result {
+            case .failure(let error):
+                let nsError = error as NSError
+                guard nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError else { return false }
+            case .success(let data):
+                let decoder = JSONDecoder()
+                switch name {
+                case "habitica_pomodoro_block_progress.json":
+                    if (try? decoder.decode(BlockProgress.self, from: data)) == nil { return false }
+                case "habitica_pomodoro_block_history.json":
+                    if (try? decoder.decode(BlockHistory.self, from: data)) == nil { return false }
+                default:
+                    if (try? decoder.decode(DailyBlocksHistory.self, from: data)) == nil { return false }
+                }
+            }
+        }
+        return true
     }
 
     func startMonitoring() {
@@ -184,7 +349,7 @@ class SettingsManager: ObservableObject {
     
     private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
         do {
-            let jsonData = try Data(contentsOf: url)
+            let jsonData = try PomodoroFileChanges.shared.readData(from: url)
             let decoded = try JSONDecoder().decode(type, from: jsonData)
             PomodoroFileChanges.shared.consume(url, data: jsonData)
             return decoded
@@ -211,6 +376,7 @@ class SettingsManager: ObservableObject {
 
     @discardableResult
     func save() -> Bool {
+        PomodoroFileChanges.shared.noteLocalMutation(fileURL)
         var saved = false
         if let data = try? JSONEncoder().encode(settings) {
             // Save to file
@@ -232,8 +398,10 @@ class SettingsManager: ObservableObject {
     func reload() {
         isReloading = true
         defer { isReloading = false }
+        let acknowledge = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: fileURL)
         if let loaded = Self.loadFile(UserSettings.self, from: fileURL) {
             settings = loaded
+            acknowledge()
         } else if let data = UserDefaults.standard.data(forKey: localBackupKey),
                   let decoded = try? JSONDecoder().decode(UserSettings.self, from: data) {
             settings = decoded
@@ -305,7 +473,7 @@ class BlockProgressManager: ObservableObject {
     
     private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
         do {
-            let jsonData = try Data(contentsOf: url)
+            let jsonData = try PomodoroFileChanges.shared.readData(from: url)
             let decoded = try JSONDecoder().decode(type, from: jsonData)
             PomodoroFileChanges.shared.consume(url, data: jsonData)
             return decoded
@@ -315,6 +483,7 @@ class BlockProgressManager: ObservableObject {
     }
     
     private static func saveFile<T: Codable>(_ data: T, to url: URL) -> Bool {
+        PomodoroFileChanges.shared.noteLocalMutation(url)
         do {
             let directory = url.deletingLastPathComponent()
             if !FileManager.default.fileExists(atPath: directory.path) {
@@ -368,8 +537,12 @@ class BlockProgressManager: ObservableObject {
 
     /// 数据目录变化后（如 iOS 授权 iCloud 文件夹）重新加载全部三类数据
     func reload() {
+        let acknowledgeProgress = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: progressFileURL)
+        let acknowledgeHistory = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: historyFileURL)
+        let acknowledgeDaily = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: dailyBlocksFileURL)
         if let loaded = Self.loadFile(BlockProgress.self, from: progressFileURL) {
             blockProgress = loaded
+            acknowledgeProgress()
         } else if let data = UserDefaults.standard.data(forKey: localBackupProgressKey),
                   let decoded = try? JSONDecoder().decode(BlockProgress.self, from: data) {
             blockProgress = decoded
@@ -379,6 +552,7 @@ class BlockProgressManager: ObservableObject {
 
         if let loaded = Self.loadFile([String: [BlockHistoryEntry]].self, from: historyFileURL) {
             blockHistory = loaded
+            acknowledgeHistory()
         } else if let data = UserDefaults.standard.data(forKey: localBackupHistoryKey),
                   let decoded = try? JSONDecoder().decode([String: [BlockHistoryEntry]].self, from: data) {
             blockHistory = decoded
@@ -388,6 +562,7 @@ class BlockProgressManager: ObservableObject {
 
         if let loaded = Self.loadFile(DailyBlocksHistory.self, from: dailyBlocksFileURL) {
             dailyBlocksHistory = loaded
+            acknowledgeDaily()
         } else if let data = UserDefaults.standard.data(forKey: localBackupDailyBlocksKey),
                   let decoded = try? JSONDecoder().decode(DailyBlocksHistory.self, from: data) {
             dailyBlocksHistory = decoded
@@ -613,7 +788,7 @@ class TopThreeManager: ObservableObject {
 
     private static func loadFile<T: Codable>(_ type: T.Type, from url: URL) -> T? {
         do {
-            let jsonData = try Data(contentsOf: url)
+            let jsonData = try PomodoroFileChanges.shared.readData(from: url)
             let decoded = try JSONDecoder().decode(type, from: jsonData)
             PomodoroFileChanges.shared.consume(url, data: jsonData)
             return decoded
@@ -624,6 +799,7 @@ class TopThreeManager: ObservableObject {
 
     @discardableResult
     func save() -> Bool {
+        PomodoroFileChanges.shared.noteLocalMutation(fileURL)
         rememberCloudState()
         do {
             let url = fileURL
@@ -650,9 +826,11 @@ class TopThreeManager: ObservableObject {
 
     /// 数据目录变化后（如 iOS 授权 iCloud 文件夹）重新加载
     func reload() {
+        let acknowledge = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: fileURL)
         if let loaded = Self.loadFile(TopThreeStore.self, from: fileURL) {
             store = loaded
-        } else if FileManager.default.fileExists(atPath: fileURL.path) {
+            acknowledge()
+        } else if PomodoroFileChanges.shared.fileExists(at: fileURL) {
             return // Keep an undecodable cloud revision pending rather than upgrade/write a backup over it.
         } else if let data = UserDefaults.standard.data(forKey: localBackupKey),
                   let decoded = try? JSONDecoder().decode(TopThreeStore.self, from: data) {
@@ -1452,7 +1630,7 @@ class HistogramManager: ObservableObject {
 
     init() {
         let url = PomodoroDataDir.fileURL("habitica_pomodoro_histogram.json")
-        if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode(Histogram.self, from: data) {
+        if let data = try? PomodoroFileChanges.shared.readData(from: url), let decoded = try? JSONDecoder().decode(Histogram.self, from: data) {
             histogram = decoded
             loadedHistogram = decoded
             loadedData = data
@@ -1462,7 +1640,7 @@ class HistogramManager: ObservableObject {
         } else if let decoded = Self.backup(at: url) {
             histogram = decoded
             // Only migrate when absent, never overwrite an unreadable existing file.
-            if !FileManager.default.fileExists(atPath: url.path) { save() }
+            if !PomodoroFileChanges.shared.fileExists(at: url) { save() }
         } else { histogram = [:] }
         loadedHistogram = histogram
         loadedPath = url.path
@@ -1471,14 +1649,18 @@ class HistogramManager: ObservableObject {
     func reload() {
         let url = fileURL
         let samePath = loadedPath == url.path
-        if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode(Histogram.self, from: data) {
+        let acknowledge = PomodoroFileChanges.shared.explicitReloadAcknowledgement(for: url)
+        var replacedDirtyState = false
+        if let data = try? PomodoroFileChanges.shared.readData(from: url), let decoded = try? JSONDecoder().decode(Histogram.self, from: data) {
+            // Same-path reload merges unsaved deltas rather than discarding them.
+            replacedDirtyState = !samePath || histogram == loadedHistogram
             histogram = samePath ? mergingUnwrittenChanges(into: decoded) : decoded
             loadedHistogram = decoded
             loadedData = data
             loadedPath = url.path
             PomodoroFileChanges.shared.consume(url, data: data)
             Self.rememberBackup(data, at: url)
-        } else if samePath && FileManager.default.fileExists(atPath: url.path) {
+        } else if samePath && PomodoroFileChanges.shared.fileExists(at: url) {
             return // Same-path corruption retains unsaved cache, without acknowledging bad bytes.
         } else {
             // A directory switch must never display or apply deltas from the previous folder.
@@ -1488,6 +1670,7 @@ class HistogramManager: ObservableObject {
             loadedPath = url.path
         }
         NotificationCenter.default.post(name: .histogramChanged, object: nil)
+        if replacedDirtyState { acknowledge() }
     }
 
     /// Narrow read-before-write protection, not a distributed conflict-resolution protocol.
@@ -1535,7 +1718,13 @@ class HistogramManager: ObservableObject {
     }
     @discardableResult
     func save(replacingAll: Bool = false) -> Bool {
-        if loadedPath != fileURL.path { reload() }
+        PomodoroFileChanges.shared.noteLocalMutation(fileURL)
+        if loadedPath != fileURL.path {
+            reload()
+            // The explicit path replacement may acknowledge the previous dirty value;
+            // this save attempt must still own dirty protection if its write fails.
+            PomodoroFileChanges.shared.noteLocalMutation(fileURL)
+        }
         if FileManager.default.fileExists(atPath: fileURL.path) {
             guard let disk = try? Data(contentsOf: fileURL),
                   let remote = try? JSONDecoder().decode(Histogram.self, from: disk) else {
@@ -1640,6 +1829,8 @@ class AudioManager: ObservableObject {
     // 栖时场景多轨播放（AVPlayer：本地文件与公开站流式统一支持；循环 = 播完 seek 0 重播）
     private var qishiPlayers: [(player: AVPlayer, trackVolume: Int)] = []
     private var qishiObservers: [NSObjectProtocol] = []
+    private var qishiPaused = false
+    private var qishiPreviewManager: AudioManager?
     private(set) var currentQishiSceneId: String?
     /// 跨番茄记忆：新番茄随机场景时避开上一个（stop 后保留）
     private(set) var lastQishiSceneId: String?
@@ -1694,8 +1885,9 @@ class AudioManager: ObservableObject {
 
     func playAmbient(sound: String, volume: Double) {
         guard sound != "None" else { stopAmbient(); return }
-        if ambientFilename == sound, ambientPlayer?.isPlaying == true {
-            ambientPlayer?.volume = Float(min(1, max(0, volume)))
+        if ambientFilename == sound, let player = ambientPlayer {
+            player.volume = Float(min(1, max(0, volume)))
+            if !player.isPlaying { player.play() }
             return
         }
         stopAmbient()
@@ -1707,6 +1899,13 @@ class AudioManager: ObservableObject {
             ambientPlayer?.volume = Float(volume)
             ambientPlayer?.play()
         } catch { lastError = "无法播放环境音：\(error.localizedDescription)"; print("Ambient audio error: \(error)") }
+    }
+
+    /// Pause playback resources without discarding this focus session's scene or position.
+    func pauseAmbient() {
+        ambientPlayer?.pause()
+        qishiPaused = true
+        for entry in qishiPlayers { entry.player.pause() }
     }
 
     func stopAmbient() {
@@ -1722,6 +1921,7 @@ class AudioManager: ObservableObject {
     /// newSession=true 在番茄开始时调用（换新场景，避开上个番茄）；
     /// false 在暂停恢复/回前台时调用（延续当前场景，只调音量或重播同一场景）。
     func playAmbientFor(settings: UserSettings, newSession: Bool) {
+        if newSession { stopPreview() }
         guard settings.ambientSource == "qishi" else {
             stopQishi()
             playAmbient(sound: settings.ambientSound, volume: settings.ambientSoundVolume)
@@ -1740,14 +1940,16 @@ class AudioManager: ObservableObject {
             lastError = "栖时场景库不可用（qishi_presets.json 缺失或为空）"
             return
         }
-        if currentQishiSceneId == chosen.id, isQishiPlaying {
+        if currentQishiSceneId == chosen.id, !qishiPlayers.isEmpty {
             setQishiVolume(settings.ambientSoundVolume)
+            if qishiPaused {
+                qishiPaused = false
+                for entry in qishiPlayers { entry.player.play() }
+            }
             return
         }
         playQishiScene(chosen, volume: settings.ambientSoundVolume)
     }
-
-    private var isQishiPlaying: Bool { qishiPlayers.contains { $0.player.rate > 0 } }
 
     private static func trackGain(_ trackVolume: Int, user: Double) -> Double {
         min(1, max(0, Double(trackVolume) / 100.0 * min(1, max(0, user))))
@@ -1760,10 +1962,14 @@ class AudioManager: ObservableObject {
             let player = AVPlayer(url: url)
             player.volume = Float(Self.trackGain(track.volume, user: volume))
             let observer = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: nil
-            ) { _ in
+                forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
+            ) { [weak self, weak player] _ in
+                guard let self = self, let player = player,
+                      self.qishiPlayers.contains(where: { $0.player === player }) else { return }
+                // EOF can be delivered after pause. Keep the owned loop ready for resume,
+                // but never restart playback while this focus session is paused.
                 player.seek(to: .zero)
-                player.play()
+                if !self.qishiPaused { player.play() }
             }
             qishiObservers.append(observer)
             qishiPlayers.append((player, track.volume))
@@ -1790,9 +1996,24 @@ class AudioManager: ObservableObject {
         qishiObservers.removeAll()
         for entry in qishiPlayers { entry.player.pause(); entry.player.replaceCurrentItem(with: nil) }
         qishiPlayers.removeAll()
+        qishiPaused = false
         currentQishiSceneId = nil
     }
 
-    /// Short previews use the alert player, never replace the ongoing focus ambience.
-    func stopPreview() { soundPlayer?.stop(); soundPlayer = nil }
+    /// Preview has its own player owner and never changes focus scene identity/history.
+    func playQishiPreview(_ preset: QishiPreset, volume: Double) {
+        stopPreview()
+        let preview = AudioManager()
+        preview.playQishiScene(preset, volume: volume)
+        qishiPreviewManager = preview
+        lastError = preview.lastError
+    }
+
+    /// Settings disappearance and stop-preview release preview resources only.
+    func stopPreview() {
+        soundPlayer?.stop()
+        soundPlayer = nil
+        qishiPreviewManager?.stopAmbient()
+        qishiPreviewManager = nil
+    }
 }

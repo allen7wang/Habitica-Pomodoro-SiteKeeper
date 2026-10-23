@@ -1,0 +1,30 @@
+{
+  "type": "offline-visual-prototype",
+  "compare": "index.html",
+  "variants": [
+    "001-mint-native",
+    "001-garden-calm",
+    "001-focus-studio"
+  ],
+  "variantCount": 3,
+  "htmlFiles": [
+    {
+      "path": "sketches/fresh-ui/001-mint-native/index.html",
+      "sha256": "28735735e14c66113446b18db28a57deb6bea4b82473e24447ef52686b5308c3"
+    },
+    {
+      "path": "sketches/fresh-ui/001-garden-calm/index.html",
+      "sha256": "a3b9dc02aad6da03beb441d781bc7b2dcb26a7a18618b59520ff284648e39eaa"
+    },
+    {
+      "path": "sketches/fresh-ui/001-focus-studio/index.html",
+      "sha256": "6c57ffd612007b97ed9918eb86582d21d45383d57dcfcf8df28e071733bc9667"
+    },
+    {
+      "path": "sketches/fresh-ui/index.html",
+      "sha256": "28735735e14c66113446b18db28a57deb6bea4b82473e24447ef52686b5308c3"
+    }
+  ],
+  "productionCodeChanged": false,
+  "realUserDataAccessed": false
+}

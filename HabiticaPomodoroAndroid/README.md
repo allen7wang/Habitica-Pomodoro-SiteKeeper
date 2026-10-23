@@ -1,12 +1,14 @@
 # Habitica Pomodoro Android
 
-Kotlin + Jetpack Compose 客户端。以 macOS 的可移植业务为基准，不机械复制桌面布局。本轮仅修改 Android 子树；没有提交、推送、签名发布或新增测试框架/仓库测试源码。
+Kotlin + Jetpack Compose 客户端。以 macOS 的可移植业务为基准，不机械复制桌面布局。
+
+> **当前状态（2026-10-23）**：`v1.2.5-android` 已发布，APK 为 `HabiticaPomodoro-Android-1.2.5.apk`（versionCode 5）。下方 2026-10-03 记录属于历史，不代表当前仍未发布或那些续修仍未完成。现有离线回归见 [fixtures/README.md](fixtures/README.md)，跨端最新记录见 [FEATURE_PARITY.md](../HabiticaPomodoro/FEATURE_PARITY.md)。本轮 Android 生产代码未变；暂无 Android 真机，真机验收继续暂缓。
 
 ## 已实现的功能
 
 - **计时**：绝对结束时刻；开始、暂停/继续、显式放弃、跳到短休息。暂停不算失败；放弃/跳过不增加番茄或 combo。完成一组后保留满组计数，正确进入长休息，结束后清 combo。
 - **休息**：自动/手动开始短长休息，1/5/15/30 分钟自选休息；0–30 分钟休息延长；延长结束可清空或保留 combo，支持超时扣分。休息暂停后恢复仍走休息结束逻辑，不错误记录番茄。短/长休息均发系统通知，可另选发送 Habitica 私信。
-- **声音**：复制仓库现有 MP3 到 `app/src/main/assets/audio/`，无下载。实际提供 Sound1–9、clockTicking 及 Clock/Rain/Crickets/Birds 四种环境音，十四个资源与 Apple 端一致；只列存在的资源。结束音/休息音/环境音独立音量，预听最多 8 秒；环境音仅专注时循环，暂停、放弃、阶段切换、服务销毁时释放。使用音频焦点，结束音服务尾部有界，不无限保留前台服务。
+- **声音**：十四个自定义 MP3 与 Apple 端一致，结束音/休息音/环境音独立音量。另可选栖时 73 场景随机混音；只打包场景 JSON，音频从公开站流式，需要联网。自定义预听最多 8 秒；专注场景随机/防重/暂停恢复由 VM 持有，服务负责播放和资源释放。使用音频焦点，结束音服务尾部有界，不无限保留前台服务。
 - **时间块/植物**：1–24 块、每块 1–12 个番茄；跨午夜时段、目标、块任务完成/删除/标题编辑/预计番茄数（1–12）；不足的数组安全补齐，保留隐藏块配置。按当前实际时段计入自然日进度，完成 🌿、放弃/跳过 🥀、combo 🌳。每日首次达标记录/奖励/休息建议一次，不在超额或恢复时重复奖励；当前块计数重置与清空全部块/植物历史分开并确认。
 - **提醒**：系统块前提醒、提前 1–60 分钟、4/6 冲刺提醒；块前提醒在后台经 AlarmManager 调度，重启/时区/系统时间变化后重排，支持跨午夜。无需 exact-alarm 特殊授权；**采用非精确提醒，待机与省电政策可能使提醒晚于设定时间**。提醒需要通知权限，拒绝不崩溃。
 - **Task**：Work/MyOwn 最多新增 3 条，Chores 无上限；标题修改、完成/取消、确认删除、分类重命名、昨日只读及未完成任务顺延。标题、分类 tag、专用日期 notes 同步 Habitica；云端只导入带严格有效日期/分类标记的 Top3 todo，按远端 ID 保守合并，不导入普通 todo。
@@ -49,7 +51,15 @@ adb -s emulator-5562 install -r ~/.hermes/cache/scratch/pomo-parity-build/app/ou
 adb -s emulator-5562 shell am start -n com.habitica.pomodoro/.MainActivity
 ```
 
-## 本轮实际验证（2026-10-03）
+## 离线回归与 CI
+
+在 JDK 21 环境从仓库根运行 `python3 HabiticaPomodoroAndroid/fixtures/run.py --work /path/to/non-cloud-scratch`。已有缓存时可加 `--no-download`，仅复用工具链、不下载依赖。套件编译真实模型/VM，API/Android 服务为明确的离线替身；Compose UI、真实 MediaPlayer、音频焦点、后台与账号在线流程不在这些断言内。
+
+CI 的 Android job 使用 JDK 21，明确安装 SDK 35 的 platform-tools、platform 与 build-tools，先跑回归再构建 APK。本轮 workflow 尚未推送，远端运行是否通过仍需后续确认。
+
+## 历史验证记录（2026-10-03，非当前结论）
+
+下列保留当时结果及待修项；后续 D1、写失败提示、隔离清理及错误状态续修和 v1.2.4 发布详见上方最新记录入口，不把历史“未通过”当作当前结论。
 
 - 最新 `assembleDebug lintDebug`：在十四音效与三项定向修复落盘后实际 **BUILD SUCCESSFUL**；lint **0 errors / 9 warnings / 2 information**，未用 baseline 掩盖问题。保留 SDK XML 版本提示，不将其隐去。
 - scratch 隔离检查最终 **35/35 通过**（原 24 项＋新增 11 项）：包含生产引擎/模型/合并类、从源码提取的 Today 与 UID 回调，新增覆盖多 UUID 创建歧义、moved 归档保护/配额、UID 草稿与 owner 迁移。Android/Compose/API plumbing 使用明确的内存 fixtures，不是模拟器界面或线上 Habitica 结果；未新增仓库测试框架。真实 API 类的 UID 门禁、字面 header、HTTPS/重定向配置、无凭据 JSON 检查亦通过，HTTP 请求为 0。

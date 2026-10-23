@@ -54,12 +54,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { _ in
-            ICloudFolderGrant.shared.syncFromCloudIfNeeded()
-            PomodoroEngine.shared.resyncAfterForeground()
-            PomodoroEngine.shared.loadTodayCount()
-            Task { await TopThreeManager.shared.synchronize(settings: SettingsManager.shared.settings) }
-            BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
-            BlockNotificationManager.shared.checkReminders(settings: SettingsManager.shared.settings)
+            PomodoroEngine.shared.resyncAfterForeground {
+                ICloudFolderGrant.shared.refreshStatus()
+                Task { await TopThreeManager.shared.synchronize(settings: SettingsManager.shared.settings) }
+                BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
+                BlockNotificationManager.shared.checkReminders(settings: SettingsManager.shared.settings)
+            }
         }
         return true
     }

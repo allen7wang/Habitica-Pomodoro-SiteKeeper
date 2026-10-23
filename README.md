@@ -1,3 +1,43 @@
+# Habitica Pomodoro / SiteKeeper
+
+本仓库同时保留原始浏览器扩展，以及目前维护的 macOS、iOS、Android 原生番茄钟。原生应用包含番茄计时、时间块、种植记录、每日三件事、Habitica 集成与栖时随机场景背景音。
+
+## 项目入口
+
+| 模块 | 安装与开发说明 |
+|---|---|
+| macOS / 三端概览 | [HabiticaPomodoro/README.md](HabiticaPomodoro/README.md) |
+| iOS / iCloud Drive 授权与重签 | [HabiticaPomodoro/iOS/README.md](HabiticaPomodoro/iOS/README.md) |
+| Android | [HabiticaPomodoroAndroid/README.md](HabiticaPomodoroAndroid/README.md) |
+| 业务规则、历次验证与待验收项 | [FEATURE_PARITY.md](HabiticaPomodoro/FEATURE_PARITY.md) |
+| Apple 离线回归 | [Apple fixtures](HabiticaPomodoro/fixtures/README.md) |
+| Android 离线回归 | [Android fixtures](HabiticaPomodoroAndroid/fixtures/README.md) |
+
+## 版本与同步边界
+
+- 2026-10-23 已发布三端 **v1.2.5**：macOS `v1.2.5`、iOS `v1.2.5-ios`、Android `v1.2.5-android`。iOS 下载物为未签名 IPA，需自己的 Apple ID 重签；免费签名有 7 天有效期。
+- v1.2.5 包含云文件读取防卡顿、Apple 暂停/试听资源隔离、前台到期补记顺序修复及 CI/离线回归改进。**界面视觉仍是 v1.2.4 的样子**；三套清新方向目前只是 [设计预览](sketches/fresh-ui/README.md)，尚未落地到原生界面。
+- Mac/iPhone 授权同一 iCloud Drive 父目录后共享 JSON；Android 只经 Habitica 交换带应用日期/分类标记的 Task，设置与历史不做三端云同步。
+- 首次使用自行配置 Habitica 凭据；不配置也可离线使用。发布物不应携带个人账号或运行数据。
+
+## 开发与验证
+
+```sh
+# macOS：需要完整 Xcode 和 xcodegen（Widget 需 xcodebuild，只有 Command Line Tools 不够）
+(cd HabiticaPomodoro && bash build.sh)
+# iOS：仅编译，不安装或启动设备
+(cd HabiticaPomodoro && bash build_ios.sh --no-install)
+# Apple：隔离存储、无实际音频或 Habitica 请求
+python3 HabiticaPomodoro/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPomodoroFixtures"
+# Android：先将 JAVA_HOME 指向 JDK 21，工具链可复用本机缓存
+python3 HabiticaPomodoroAndroid/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPomodoroAndroidFixtures"
+```
+
+CI 定义见 [build.yml](.github/workflows/build.yml)：master push、面向 master 的 PR、版本 tag 与手动触发；离线回归先于构建。当前修改尚未推送，远端是否绿色须在实际运行后确认。CI 收集构建产物，不自动发布 Release。离线通过不等于真实声音、设备后台、Habitica 在线流程或 iCloud 跨设备传播已验收。
+
+## 原始浏览器扩展（历史说明）
+
+以下保留上游扩展的功能、安装和调试说明；原生客户端请使用上方入口。
 
 ### Description:
 This extension has two main features:

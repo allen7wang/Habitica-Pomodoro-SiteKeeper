@@ -29,6 +29,8 @@ class PomodoroEngine: ObservableObject {
     @Published var lastNotification = ""
 
     private var timer: Timer?
+    private var phaseRevision = 0
+    private var foregroundRecovery: UUID?
     private var endHandler: ((Date) -> Void)?
     private(set) var phaseEndsAt: Date?
     private var phaseDuration = 0
@@ -115,7 +117,8 @@ class PomodoroEngine: ObservableObject {
     }
 
     private func completePomodoro(at date: Date) {
-        guard phase == .pomodoro, !isFrozen, let configuration = activePomodoroSettings else { return }
+        guard foregroundRecovery == nil, phase == .pomodoro, !isFrozen,
+              let configuration = activePomodoroSettings else { return }
         activePomodoroSettings = nil
         stopTimer()
         audioManager.stopAmbient()
@@ -200,7 +203,7 @@ class PomodoroEngine: ObservableObject {
 
     func breakEnds() { finishBreak(at: phaseEndsAt ?? Date()) }
     private func finishBreak(at date: Date) {
-        guard phase == .breakTime else { return }
+        guard foregroundRecovery == nil, phase == .breakTime else { return }
         let isLong = completedSet || customBreak
         let breakConfiguration = activeBreakSettings ?? phaseSnapshot(settings)
         activeBreakSettings = nil
@@ -293,11 +296,12 @@ class PomodoroEngine: ObservableObject {
         guard isRunning, !isFrozen, phaseEndsAt != nil else { return }
         tick(at: Date())
         guard isRunning, phaseEndsAt != nil else { return }
+        phaseRevision += 1
         timer?.invalidate()
         timer = nil
         phaseEndsAt = nil
         isFrozen = true
-        audioManager.stopAmbient()
+        audioManager.pauseAmbient()
         #if os(iOS)
         cancelBackgroundEndNotification()
         #endif
@@ -358,6 +362,7 @@ class PomodoroEngine: ObservableObject {
     }
 
     private func beginPhase(_ next: TimerPhase, duration: Int, startingAt date: Date = Date(), end: @escaping (Date) -> Void) {
+        phaseRevision += 1
         timer?.invalidate()
         timer = nil
         phase = next
@@ -394,6 +399,9 @@ class PomodoroEngine: ObservableObject {
         timerValue = max(0, raw)
         timerString = formatTime(timerValue)
         if timerValue == 0 {
+            // Keep displaying elapsed time, but even a real scheduled Timer may not
+            // settle against stale stores while foreground reads own recovery.
+            guard foregroundRecovery == nil else { updateTomato(); notifyBadge(); return }
             let handler = endHandler
             timer?.invalidate()
             timer = nil
@@ -410,8 +418,37 @@ class PomodoroEngine: ObservableObject {
         notifyBadge()
     }
 
-    /// Catch up elapsed work → break → grace phases, but never invent unattended focus sessions.
-    func resyncAfterForeground(chain: Int = 0, now: Date = Date()) {
+    /// One foreground boundary for both platforms: accept the asynchronous snapshot
+    /// before any elapsed phase can write. Production samples the clock at completion;
+    /// an explicit `now` is only a deterministic caller clock (used by CLI fixtures).
+    func resyncAfterForeground(chain: Int = 0, now: Date? = nil, completion: (() -> Void)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.resyncAfterForeground(chain: chain, now: now, completion: completion) }
+            return
+        }
+        let monitor = PomodoroFileChanges.shared
+        let directory = monitor.directoryIdentity()
+        let phaseRevision = self.phaseRevision
+        let recovery = UUID()
+        foregroundRecovery = recovery
+        monitor.syncFromDiskIfNeeded { [weak self] in
+            defer { completion?() }
+            guard let self = self, self.foregroundRecovery == recovery else { return }
+            let samePhase = self.phaseRevision == phaseRevision
+            let sameDirectory = monitor.directoryIdentity() == directory
+            if samePhase && !sameDirectory {
+                // Never let the next scheduled tick settle the old folder's elapsed
+                // phase into the new folder. A user may explicitly resume it later.
+                self.freeze()
+            }
+            self.foregroundRecovery = nil
+            guard samePhase, sameDirectory else { return }
+            self.catchUpElapsedPhases(at: now ?? Date())
+        }
+    }
+
+    /// Catch up elapsed work → break → grace, never invent unattended focus sessions.
+    private func catchUpElapsedPhases(at now: Date) {
         for _ in 0..<6 {
             guard isRunning, !isFrozen, let deadline = phaseEndsAt else { break }
             tick(at: now)
@@ -421,6 +458,7 @@ class PomodoroEngine: ObservableObject {
     }
 
     private func stopTimer() {
+        phaseRevision += 1
         timer?.invalidate()
         timer = nil
         phaseEndsAt = nil

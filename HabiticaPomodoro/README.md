@@ -4,9 +4,9 @@
 
 基于 [ofekmiz/Habitica-Pomodoro-SiteKeeper](https://github.com/ofekmiz/Habitica-Pomodoro-SiteKeeper) Chrome 扩展的 macOS 原生重制与增强版。
 
-**Mac ↔ iPhone 数据同步**：Mac 与 iPhone/iPad 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的 JSON 数据文件（含单独的植物记录），设置、任务、时间块进度、历史双向同步。Android 无法读取该 iCloud 目录；新版源码可经 Habitica todo 导入 Mac/iPhone 已上传、带日期与分类标记的 Top 3 任务，但无法同步纯本地任务、设置及种植历史。Android 新版尚未发布。
+**Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。
 
-> **源码与发布版不同**：当前制作 **v1.2.3 本地测试新版**，补齐三端业务功能，并修复独立审查确认的任务同步与授权回退问题。详见 [功能对齐验收清单](FEATURE_PARITY.md)。新版构建与修后终审尚在进行，本轮尚未提交或发布，不能把旧 Release 当作本轮功能产物。
+> **版本状态（2026-10-23）**：三端 **v1.2.5** 已发布（macOS `v1.2.5` / iOS `v1.2.5-ios` / Android `v1.2.5-android`），包含云文件读取防卡顿、Apple 暂停/试听资源隔离与前台到期补记顺序修复。界面视觉尚未改造，`sketches/fresh-ui/` 中的三套方案只是设计预览。实际验证及未验收边界见 [功能对齐验收清单](FEATURE_PARITY.md)。
 
 ## 功能特性
 
@@ -15,14 +15,16 @@
 - 点击圆圈开始 / 暂停 / 继续；放弃为独立操作，暂停不会被记成失败
 - 自定义番茄时长、短休息、长休息、番茄组数量
 - 完成 / 失败自动同步 Habitica habit（+ / -）
-- 结束音效、环境音（雨声、鸟鸣、蟋蟀、钟声）
+- 结束音效、环境音（自定义雨声/鸟鸣/蟋蟀/钟声，或栖时 73 场景随机混音）
+- 栖时模式每个番茄随机且避开上次场景；本轮 Apple 修复暂停后同场景/同播放器继续，以及设置试听与专注分离
+- 仅清单随包：Mac 优先读取本机栖时仓库音频，不存在时流式；iOS/Android 从公开站流式，需要联网
 
 ### 🧱 智能时间块 (Block Mode)
 - 时间块数量可设为 1–24（默认 8 块，04:00 起每 3 小时一块），每块 1–12 个番茄；支持跨午夜时段
 - 每块设定目标（Block Goal）与任务清单
 - 可视化时间轴：横向卡片展示 B1–B8，当前块橙色高亮，支持 "Current" 按钮一键定位居中
 - 块内番茄进度追踪（如 4/6）；macOS 首页 B1–B8 的种植位：空圆点表示尚未种植，完成一个 Pomo 长一棵灌木 🌿，中途放弃或跳过显示枯萎 🥀；完成一个 combo 还会在同排末尾额外长一棵树 🌳（不替代灌木）
-- 种植记录按天保存在 `habitica_pomodoro_plants.json`，位于 Mac/iPhone 共用的 iCloud Drive 数据目录；与时间块进度文件分开，旧版 iOS 写入进度时不会清除植物记录。当前仓库源码中 iOS 和 Android 均已加入种植位，已发布的旧版移动端尚未包含此更新
+- 种植记录按天保存在 `habitica_pomodoro_plants.json`，位于 Mac/iPhone 共用的 iCloud Drive 数据目录；与时间块进度文件分开。三端 v1.2.4 均已包含种植位，Android 记录保存在本机
 - 块完成自动 Habitica 奖励 + 休息建议
 - 智能提醒：块开始前提醒（提前 1–60 分钟可配）、块进度冲刺提醒
 - 每日块记录持久化，支持历史回看
@@ -75,7 +77,7 @@
 
 ### 方式 A：源码构建（推荐，免费 Apple ID 即可）
 
-需要一台装了 Xcode 16+ 的 Mac。
+需要一台装了 Xcode 16+ 的 Mac。已有签名环境时，可连接并解锁 iPhone，在 `HabiticaPomodoro` 目录运行 `bash resign_ios.sh` 重签覆盖安装；该命令会操作所有已连接的实体 iPhone，详情见 [iOS 说明](iOS/README.md)。
 
 ```bash
 git clone https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper.git
@@ -106,7 +108,7 @@ bash build_ios.sh --no-install # 仅编译
 
 ### 方式 B：未签名 .ipa + 第三方重签工具
 
-从 Release 下载 `HabiticaPomodoro-iOS-unsigned.ipa`，用 [AltStore](https://altstore.io) / [Sideloadly](https://sideloadly.io) 等工具以你自己的 Apple ID 重签后安装。同样受 7 天有效期限制（AltStore 可自动续签）。
+从 `v1.2.5-ios` Release 下载 `HabiticaPomodoro-iOS-1.2.5-unsigned.ipa`（CI 收集时使用通用名 `HabiticaPomodoro-iOS-unsigned.ipa`），用 [AltStore](https://altstore.io) / [Sideloadly](https://sideloadly.io) 等工具以你自己的 Apple ID 重签后安装。同样受 7 天有效期限制（AltStore 可自动续签）。
 
 > 出于隐私考虑，Release 不提供已签名的 .ipa —— 已签名版本内嵌开发者 Team ID 与被授权设备的 UDID，且只能在那一台设备上安装。
 
@@ -121,7 +123,7 @@ bash build_ios.sh --no-install # 仅编译
 
 ## 安装 — Android
 
-1. 从 [Releases](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases) 下载 `HabiticaPomodoro-Android-v1.0.0.apk`（tag `v1.0.0-android`）
+1. 从 [Android v1.2.5 Release](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v1.2.5-android) 下载 `HabiticaPomodoro-Android-1.2.5.apk`
 2. 传到手机，点击安装（需允许「安装未知来源应用」）
 3. 打开 App → 设置 → 填写 Habitica User ID 与 API Token
 
@@ -129,7 +131,7 @@ bash build_ios.sh --no-install # 仅编译
 - Android 新版源码的 Task 页可手动刷新 Habitica todo，并在启动、返回前台或更换账号后自动尝试导入 **Mac/iPhone 已上传且备注包含应用专用日期、分类标记** 的任务；通过 Habitica ID 合并标题与完成状态，不覆盖本机离线任务。纯本地任务及其他 Habitica todo 不会被导入；此在线同步尚未使用真实账号端到端验证
 - Android 的设置/历史/植物保存在本机，不能通过 iCloud Drive 与 Mac/iPhone 同步
 - Android 无法访问 iCloud Drive，因此 Mac↔iPhone 的 iCloud 文件同步不适用于 Android（平台限制）
-- 当前仓库源码包含更新后的 Android 时间块/种植、Habits/Dailies 与历史功能；Release `v1.0.0-android` 仍是旧版 MVP，尚未上传新版 APK
+- Android v1.2.5 已包含时间块/种植、Habits/Dailies、历史及栖时随机场景；真机验收因暂无设备暂缓，不能把发布或离线回归视作这些交互已实测
 
 源码构建：
 
@@ -162,7 +164,7 @@ bash build_android.sh release    # release APK（无 keystore.properties 时用 
 ```bash
 cd HabiticaPomodoro
 
-# macOS
+# macOS（主程序 swiftc，Widget 需要 xcodegen + Xcode）
 bash build.sh        # swiftc Universal .app 输出 ~/Library/Caches/HabiticaPomodoroBuild/；DMG 留在本目录
 
 # iOS（需 Xcode + xcodegen）
@@ -170,6 +172,12 @@ bash build_ios.sh    # 生成工程 → 编译 → 安装到 iPhone 17 模拟器
 ```
 
 构建输出的 `.app` 位于 `~/Library/Caches/HabiticaPomodoroBuild/`，可用 `HABITICA_BUILD_OUTPUT` 指向其他**非 iCloud** 目录；不要运行旧的仓库内 `.app` 副本。iCloud FileProvider 会反复给包根附加 Finder 属性，DMG 封装不受该 `.app` 路径问题影响，仍输出 `HabiticaPomodoro-Installer.dmg`。
+
+## 离线回归与 CI
+
+从仓库根运行 `python3 HabiticaPomodoro/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPomodoroFixtures"`，覆盖真实七文件重载/慢读/本地写竞争，以及 Apple 音频暂停和试听生命周期。音频 transport 为替身，不联网、不出声；详见 [fixtures/README.md](fixtures/README.md)。Android 套件及 JDK 21 配置见 [Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md)。
+
+CI 已配置 master push、PR、tag 与手动触发；先安装依赖并运行两端离线套件，再生成 DMG/未签名 IPA/APK。工作区的 CI 修改尚未推送，不能称远端已绿；真实声音、锁屏后台、账号切换与 iCloud 系统传送仍需人工验收。
 
 ## License
 
