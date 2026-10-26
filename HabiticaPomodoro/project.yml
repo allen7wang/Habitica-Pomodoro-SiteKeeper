@@ -22,6 +22,7 @@ targets:
       - path: iOS
       # 跨平台共享核心
       - path: HabiticaPomodoro/PlatformCompat.swift
+      - path: HabiticaPomodoro/AppStyle.swift
       - path: HabiticaPomodoro/AppTabState.swift
       - path: HabiticaPomodoro/PomodoroEngine.swift
       - path: HabiticaPomodoro/Managers.swift

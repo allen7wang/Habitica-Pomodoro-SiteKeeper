@@ -34,6 +34,12 @@ class PomodoroEngine: ObservableObject {
     private var endHandler: ((Date) -> Void)?
     private(set) var phaseEndsAt: Date?
     private var phaseDuration = 0
+
+    /// Display-only progress of the current phase (0...1). Never used for scheduling.
+    var phaseProgress: Double {
+        guard phaseDuration > 0 else { return 0 }
+        return min(1, max(0, 1 - Double(timerValue) / Double(phaseDuration)))
+    }
     private var lastTickAt: Date?
     private var activePomodoroSettings: UserSettings?
     private var activeBreakSettings: UserSettings?

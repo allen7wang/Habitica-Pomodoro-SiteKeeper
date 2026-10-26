@@ -29,6 +29,11 @@ enum PomodoroDataDir {
     /// Select the data location separately from Mac directory creation during polling.
     static var resolvedURL: URL {
         #if DEBUG
+        // UI verification only: never used by release builds.
+        if let override = ProcessInfo.processInfo.environment["POMODORO_ISOLATED_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
         if let isolated = isolatedDirectory { return isolated }
         #endif
         #if os(iOS)
