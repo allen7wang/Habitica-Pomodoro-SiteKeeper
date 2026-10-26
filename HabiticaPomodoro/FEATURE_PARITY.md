@@ -1,14 +1,14 @@
 # 桌面与移动端功能对齐验收清单
 
-> macOS、iOS、Android 的业务功能与记录规则对齐，不要求机械复制桌面布局。三端 v1.2.5 已于 2026-10-23 发布，纳入 2026-10-22 的防卡顿、Apple 音频、回归与 CI 优化；界面视觉尚未改造，`sketches/fresh-ui/` 仅为设计预览。本文同时保留历次记录，旧日期的“尚未发布/待修”不代表现状，也**不是所有人工项已通过的声明**。不含手表端。
+> macOS、iOS、Android 的业务功能与记录规则对齐，不要求机械复制桌面布局。三端 v1.2.5 于 2026-10-23 发布；macOS v1.2.6（2026-10-26）新增三套可切换界面风格，iOS / Android 仍为 v1.2.5。本文同时保留历次记录，旧日期的“尚未发布/待修”不代表现状，也**不是所有人工项已通过的声明**。不含手表端。
 
-## 当前状态索引（2026-10-23）
+## 当前状态索引（2026-10-26）
 
 | 状态 | 范围与边界 |
 |---|---|
-| 已公开 | Mac `v1.2.5`、iOS `v1.2.5-ios` 未签名 IPA、Android `v1.2.5-android` APK；包含 2026-10-22 防卡顿、Apple 音频与前台补记修复 |
-| 已安装 Mac | 2026-10-22 防卡顿热修 1.2.4/build 8；v1.2.5 尚未替换本机安装 |
-| 工作区 | 后台七文件重载、防覆盖、Apple 专注/试听资源隔离、离线回归、CI 依赖修正已随 v1.2.5 发布；界面视觉改造尚未开始 |
+| 已公开 | Mac `v1.2.6`（三套可切换风格）、iOS `v1.2.5-ios` 未签名 IPA、Android `v1.2.5-android` APK |
+| 已安装 Mac | 以用户实际安装为准；本机此前为 1.2.4/build 8 热修 |
+| 工作区 | 后台七文件重载、防覆盖、Apple 专注/试听资源隔离、离线回归、CI 依赖修正已随 v1.2.5 发布；macOS v1.2.6 只改展示层 |
 | 待验收 | 长时间日常使用、真实音频/锁屏后台、Habitica 在线及账号切换、iCloud 跨设备系统传送；Android 无设备暂缓真机 |
 | 回归入口 | [Apple fixtures](fixtures/README.md)、[Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md)；离线绿不等于设备或线上绿 |
 
@@ -143,3 +143,12 @@
 - 产物核验：Mac universal arm64+x86_64、Widget 与 DMG 内 App 均 strict 签名通过，DMG 挂载版本 1.2.5/9；iOS IPA 版本 1.2.5/4；Android APK versionCode 5，含 15 个音频资源（14 MP3 + `qishi_presets.json`），debug 签名。三份包内未发现运行设置/凭据 JSON。
 - SHA-256：DMG `ed33c6c5f9418cc4526a09a00d50f4142c565e9d0e7a931e7bd5f57ba63f5261`；IPA `df9e6bd35bc9fa27070e2ce83829a40c20199b188853a5f40f2fae3a39e73a9e`；APK `b30bc8ddf52e44a9db48da67abfaba8e2970e0464ff7804fc54831be90ab3230`。
 - 边界：这三份产物没有安装到本机 Mac、手机或 Android 设备；真实 iCloud 传送、Habitica 在线链路、锁屏后台音频及长期使用仍未验收。Apple fixtures 与 Android 回归均为离线验证，不等于在线上/设备上通过。
+
+## v1.2.6 发布记录（2026-10-26，macOS）
+
+- 版本：macOS **1.2.6 (10)**、Widget **1.2.6 (10)**。iOS / Android 保持 v1.2.5，未随本版改动。
+- 新增：三套可切换界面风格（清新原生 / 留白花园 / 效率工作台），入口为主窗口右上角调色板或 设置 → 外观；切换会保存到本机并在紧凑（470×820）与工作台（820×540）窗口尺寸间调整。专注页包含圆环计时、当前时间块、今日要事与声音入口；“查看全部”保留完整时间块与时间轴。
+- 展示层边界：计时、任务、Habitica 同步、iCloud 文件与栖时音频生命周期逻辑未改；仅新增只读 `phaseProgress` 供圆环显示。
+- 验证：Mac 通用二进制（arm64 + x86_64）、Widget 1.2.6、strict 签名与 DMG 校验通过；使用隔离数据目录（DEBUG `POMODORO_ISOLATED_DIR`）实机检查三套布局，并通过调色板与设置卡片实际切换、窗口随之变化；iOS Debug 模拟器构建通过（共享主题文件已加入 `project.yml`）。
+- 产物：DMG SHA-256 `ae11241e62010b9fbf1219203c1d9522155f7f07b86a8d379ab26f00b88b36d0`；App 可执行文件 SHA-256 `db2ee351545b2d9a6003020e9a58e9be66e1923f4285b47bae861d4f5120b191`。
+- 未验收：真实账号数据下的三套布局、字号放大/深色外观长时使用、iOS/Android 界面改造；本版未自动安装或替换用户 Mac 上的应用。

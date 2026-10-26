@@ -6,7 +6,7 @@
 
 **Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。
 
-> **版本状态（2026-10-23）**：三端 **v1.2.5** 已发布（macOS `v1.2.5` / iOS `v1.2.5-ios` / Android `v1.2.5-android`），包含云文件读取防卡顿、Apple 暂停/试听资源隔离与前台到期补记顺序修复。界面视觉尚未改造，`sketches/fresh-ui/` 中的三套方案只是设计预览。实际验证及未验收边界见 [功能对齐验收清单](FEATURE_PARITY.md)。
+> **版本状态（2026-10-26）**：macOS **v1.2.6** 已发布，新增三套可切换界面风格（清新原生 / 留白花园 / 效率工作台；右上角调色板或 设置 → 外观）。iOS / Android 仍为 v1.2.5，尚未接入移动端风格改造。业务与同步逻辑未改。
 
 ## 功能特性
 

@@ -4,6 +4,7 @@ import SwiftUI
 struct TopThreeView: View {
     @ObservedObject var manager = TopThreeManager.shared
     @ObservedObject var settingsManager = SettingsManager.shared
+    @Environment(\.appTheme) private var theme
 
     private var settings: UserSettings { settingsManager.settings }
     private var todayKey: String { manager.todayKey(settings: settings) }
@@ -50,11 +51,11 @@ struct TopThreeView: View {
                 .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.green.opacity(0.07))
+                        .fill(theme.accentSoft.opacity(0.75))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.green.opacity(0.35), lineWidth: 1)
+                        .strokeBorder(theme.line, lineWidth: 1)
                 )
 
                 // ── Yesterday 卡片：灰色调，归档感 ──
@@ -87,11 +88,11 @@ struct TopThreeView: View {
                 .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.gray.opacity(0.06))
+                        .fill(theme.subtle.opacity(0.7))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.gray.opacity(0.2), lineWidth: 1)
+                        .strokeBorder(theme.line.opacity(0.8), lineWidth: 1)
                 )
             }
             .padding(.top, 16)

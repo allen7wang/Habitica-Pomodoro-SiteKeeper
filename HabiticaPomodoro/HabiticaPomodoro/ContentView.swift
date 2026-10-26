@@ -131,8 +131,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             timerWindow = NSWindow(contentViewController: hostingController)
             timerWindow?.title = "Habitica Pomodoro"
             timerWindow?.styleMask = [.titled, .closable, .miniaturizable]
-            timerWindow?.setFrameAutosaveName("TimerWindowV7")
-            timerWindow?.setContentSize(NSSize(width: 470, height: 820))
+            timerWindow?.setFrameAutosaveName("TimerWindowV8")
+            timerWindow?.setContentSize(UIStyleStore.shared.style.windowSize)
         }
         timerWindow?.center()
         timerWindow?.makeKeyAndOrderFront(nil)
@@ -230,34 +230,27 @@ struct TimerView: View {
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var blockManager = BlockProgressManager.shared
     @ObservedObject var tabState = AppTabState.shared
-    @ObservedObject private var settingsManager = SettingsManager.shared
-    @State private var showAbandonConfirm = false
+    @ObservedObject var settingsManager = SettingsManager.shared
+    @ObservedObject var topThree = TopThreeManager.shared
+    @ObservedObject var styleStore = UIStyleStore.shared
+    @Environment(\.colorScheme) var colorScheme
+
+    @State var showAbandonConfirm = false
+    @State var showBlocksSheet = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Tab 切换: Pomo / Task / Habits / Dailies / Profile (⌘1-5 快捷键)
-            Picker("", selection: $tabState.selectedTab) {
-                Text("Pomo").tag(0)
-                Text("Task").tag(1)
-                Text("Habits").tag(2)
-                Text("Dailies").tag(3)
-                Text("Role").tag(4)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-
-            switch tabState.selectedTab {
-            case 0: pomoTab
-            case 1: taskTab
-            case 2: HabiticaHabitsView()
-            case 3: HabiticaDailiesView()
-            default: HabiticaProfileView()
+        Group {
+            switch styleStore.style {
+            case .mint: mintLayout
+            case .garden: gardenLayout
+            case .studio: studioLayout
             }
         }
-        .frame(width: 470, height: 820)
-        .background(Color(NSColor.windowBackgroundColor))
+        .frame(width: styleStore.style.windowSize.width,
+               height: styleStore.style.windowSize.height)
+        .environment(\.appTheme, theme)
+        .background(theme.background)
+        .background(WindowSizeConfigurator(size: styleStore.style.windowSize))
         .confirmationDialog("放弃当前番茄？时间块中的植物将记为枯萎。",
                             isPresented: $showAbandonConfirm, titleVisibility: .visible) {
             Button("放弃番茄", role: .destructive) {
@@ -265,6 +258,7 @@ struct TimerView: View {
             }
             Button("取消", role: .cancel) {}
         }
+        .sheet(isPresented: $showBlocksSheet) { blocksSheet }
     }
 
     // MARK: - Pomo Tab（番茄钟相关）
@@ -457,11 +451,13 @@ struct SettingsView: View {
     @ObservedObject var sm = SettingsManager.shared
     @ObservedObject var am = AudioManager.shared
     @ObservedObject private var blockManager = BlockProgressManager.shared
+    @ObservedObject private var styleStore = UIStyleStore.shared
     @State private var showResetBlockConfirm = false
     @State private var showClearBlocksConfirm = false
 
     var body: some View {
         TabView {
+            appearanceSettingsTab.tabItem { Label("外观", systemImage: "paintpalette") }
             timerSettingsTab.tabItem { Label("Timer", systemImage: "timer") }
             blockSettingsTab.tabItem { Label("Blocks", systemImage: "square.grid.3x3") }
             habiticaSettingsTab.tabItem { Label("Habitica", systemImage: "link") }
@@ -794,6 +790,68 @@ struct SettingsView: View {
         }
     }
     
+    var appearanceSettingsTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("界面风格").font(.headline)
+                Text("三种布局可随时切换；选择保存在本机，不影响任务、计时或同步数据。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                ForEach(AppUIStyle.allCases) { style in
+                    appearanceCard(style)
+                }
+
+                Divider()
+                Text("当前：\(styleStore.style.title)。也可以用主窗口右上角的调色板按钮快速切换。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+        }
+    }
+
+    func appearanceCard(_ style: AppUIStyle) -> some View {
+        let preview = AppTheme(style: style, dark: false)
+        let selected = styleStore.style == style
+        return Button {
+            styleStore.style = style
+        } label: {
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Circle().fill(preview.accent).frame(width: 12, height: 12)
+                    Circle().fill(preview.accentSoft).frame(width: 12, height: 12)
+                    Circle()
+                        .fill(preview.background)
+                        .frame(width: 12, height: 12)
+                        .overlay(Circle().strokeBorder(preview.line, lineWidth: 1))
+                }
+                .frame(width: 52, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(style.title).font(.system(size: 13, weight: .medium))
+                    Text(style.tagline).font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(selected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.18), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func syncAllData() {
         PomodoroFileChanges.shared.syncFromDiskIfNeeded { saveAllDataAfterSync() }
     }
