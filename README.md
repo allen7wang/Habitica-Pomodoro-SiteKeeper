@@ -15,8 +15,8 @@
 
 ## 版本与同步边界
 
-- 2026-10-26 已发布 **macOS v1.2.6**：界面新增三套可切换风格（清新原生 / 留白花园 / 效率工作台），通过主窗口右上角调色板或 设置 → 外观 切换。iOS / Android 仍为 v1.2.5，界面改造尚未落地到移动端。
-- v1.2.5 已包含云文件读取防卡顿、Apple 暂停/试听资源隔离、前台到期补记顺序修复及 CI/离线回归改进；macOS v1.2.6 在其基础上只改展示层。
+- 2026-10-28 发布 **[macOS v1.2.7](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v1.2.7)**：任务、习惯、每日、角色四页补齐三套皮肤（清新原生 / 留白花园 / 效率工作台）及深浅色适配，统一卡片与操作控件，修复花园风格的滚动和留白。通过主窗口右上角调色板或 设置 → 外观 切换。iOS / Android 仍为 v1.2.5。
+- v1.2.5 已包含云文件读取防卡顿、Apple 暂停/试听资源隔离、前台到期补记顺序修复及 CI/离线回归改进；macOS v1.2.6 / v1.2.7 在其基础上只改展示层。
 - Mac/iPhone 授权同一 iCloud Drive 父目录后共享 JSON；Android 只经 Habitica 交换带应用日期/分类标记的 Task，设置与历史不做三端云同步。
 - 首次使用自行配置 Habitica 凭据；不配置也可离线使用。发布物不应携带个人账号或运行数据。
 
@@ -33,7 +33,7 @@ python3 HabiticaPomodoro/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPo
 python3 HabiticaPomodoroAndroid/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPomodoroAndroidFixtures"
 ```
 
-CI 定义见 [build.yml](.github/workflows/build.yml)：master push、面向 master 的 PR、版本 tag 与手动触发；离线回归先于构建。当前修改尚未推送，远端是否绿色须在实际运行后确认。CI 收集构建产物，不自动发布 Release。离线通过不等于真实声音、设备后台、Habitica 在线流程或 iCloud 跨设备传播已验收。
+CI 定义见 [build.yml](.github/workflows/build.yml)：master push、面向 master 的 PR、版本 tag 与手动触发；离线回归先于构建，远端结果以 GitHub Actions 实际记录为准。CI 收集构建产物，不自动发布 Release。离线通过不等于真实声音、设备后台、Habitica 在线流程或 iCloud 跨设备传播已验收。
 
 ## 原始浏览器扩展（历史说明）
 

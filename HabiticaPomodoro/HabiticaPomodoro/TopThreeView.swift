@@ -12,6 +12,9 @@ struct TopThreeView: View {
 
     var body: some View {
         ScrollView(showsIndicators: false) {
+#if os(macOS)
+            themedContent
+#else
             VStack(spacing: 14) {
                 HStack {
                     Text("每日任务").font(.headline)
@@ -97,12 +100,92 @@ struct TopThreeView: View {
             }
             .padding(.top, 16)
             .padding(.bottom, 16)
+#endif
         }
         .task { await manager.synchronize(settings: settings) }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             manager.objectWillChange.send()
         }
     }
+
+#if os(macOS)
+    private var themedContent: some View {
+        VStack(alignment: .leading, spacing: theme.pageSpacing) {
+            ThemedPageHeader(title: "每日任务", subtitle: "把重要的事，先做好。", symbol: "checklist")
+
+            HStack(spacing: 10) {
+                Label("今天完成 \(todayCompleted)/\(todayTasks.count)", systemImage: "checkmark.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.muted)
+                Spacer(minLength: 0)
+                Button {
+                    Task { await manager.synchronize(settings: settings) }
+                } label: {
+                    Label(manager.syncInProgress ? "同步中…" : "同步 Habitica", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(QuietButtonStyle(theme: theme))
+                .disabled(manager.syncInProgress || !settings.connectHabitica || settings.uid.isEmpty || settings.apiToken.isEmpty)
+            }
+            if let message = manager.syncMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if theme.style == .studio {
+                HStack(alignment: .top, spacing: theme.pageSpacing) {
+                    daySection(key: todayKey, editable: true)
+                    daySection(key: yesterdayKey, editable: false)
+                }
+            } else {
+                daySection(key: todayKey, editable: true)
+                daySection(key: yesterdayKey, editable: false)
+            }
+        }
+        .padding(.horizontal, theme.pageInset)
+        .padding(.top, 16)
+        .padding(.bottom, 22)
+    }
+
+    private var todayTasks: [TopThreeTask] {
+        (0..<manager.categoryCount).flatMap { manager.getTasks(key: todayKey, category: $0) }
+    }
+
+    private var todayCompleted: Int { todayTasks.filter { $0.isCompleted }.count }
+
+    private func daySection(key: String, editable: Bool) -> some View {
+        VStack(alignment: .leading, spacing: theme.rowSpacing) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(editable ? theme.accent : theme.muted)
+                    .frame(width: 6, height: 6)
+                Text(editable ? "今天" : "昨天")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(editable ? theme.ink : theme.muted)
+                Text(shortDate(key))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundColor(theme.muted)
+                Spacer(minLength: 0)
+                if !editable {
+                    Text("已归档")
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.muted)
+                }
+            }
+            Text(editable ? "点击任务文字编辑，点击圆圈完成" : "未完成的任务可移到今天")
+                .font(.system(size: 10))
+                .foregroundColor(theme.muted)
+                .padding(.bottom, 3)
+
+            ForEach(0..<manager.categoryCount, id: \.self) { cat in
+                TopThreeCategorySection(dateKey: key, category: cat, editable: editable, canMoveToToday: !editable)
+                    .themeCard(theme, padding: theme.cardPadding)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+#endif
 
     private func shortDate(_ key: String) -> String {
         let parts = key.split(separator: "-")
@@ -113,6 +196,7 @@ struct TopThreeView: View {
 
 // MARK: - Category Section (一个分类：Work / MyOwn / 琐事)
 struct TopThreeCategorySection: View {
+    @Environment(\.appTheme) private var theme
     @ObservedObject var manager = TopThreeManager.shared
     @ObservedObject var settingsManager = SettingsManager.shared
 
@@ -133,15 +217,51 @@ struct TopThreeCategorySection: View {
     private var isFreeList: Bool { manager.isFreeList(category: category) }
 
     private var categoryColor: Color {
+#if os(macOS)
+        return theme.accent
+#else
         switch category {
         case 0: return .blue
         case 1: return .purple
         default: return .orange
         }
+#endif
+    }
+
+    private var mutedColor: Color {
+#if os(macOS)
+        return theme.muted
+#else
+        return .secondary
+#endif
+    }
+
+    private var completionColor: Color {
+#if os(macOS)
+        return theme.accent
+#else
+        return .green
+#endif
+    }
+
+    private var hintColor: Color {
+#if os(macOS)
+        return theme.muted.opacity(0.8)
+#else
+        return .secondary.opacity(0.6)
+#endif
+    }
+
+    private var sectionSpacing: CGFloat {
+#if os(macOS)
+        return theme.rowSpacing
+#else
+        return 4
+#endif
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: sectionSpacing) {
             // 分类标题行（今天可点击重命名）
             HStack(spacing: 6) {
                 if renamingCategory {
@@ -149,7 +269,7 @@ struct TopThreeCategorySection: View {
                         manager.setCategoryName(index: category, name: draftCategoryName.isEmpty ? manager.categoryName(index: category) : draftCategoryName, settings: settings)
                         renamingCategory = false
                     })
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(TaskInputStyle())
                     .font(.caption.bold())
                     .frame(width: 120)
                     .cancelOnExitCommand { renamingCategory = false }
@@ -161,7 +281,7 @@ struct TopThreeCategorySection: View {
                         if editable {
                             Image(systemName: "pencil")
                                 .font(.caption2)
-                                .foregroundColor(.secondary.opacity(0.6))
+                                .foregroundColor(hintColor)
                         }
                     }
                     .contentShape(Rectangle())
@@ -173,11 +293,20 @@ struct TopThreeCategorySection: View {
 
                     Text("\(completedCount)/\(tasks.count)")
                         .font(.caption.monospacedDigit())
-                        .foregroundColor(!tasks.isEmpty && completedCount == tasks.count ? .green : .secondary)
+                        .foregroundColor(!tasks.isEmpty && completedCount == tasks.count ? completionColor : mutedColor)
                 }
                 Spacer()
             }
             .padding(.leading, 2)
+
+#if os(macOS)
+            if tasks.isEmpty && !editable {
+                Text("这一天没有任务")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.muted)
+                    .padding(.vertical, 8)
+            }
+#endif
 
             // 任务列表
             ForEach(tasks) { task in
@@ -221,7 +350,7 @@ struct TopThreeCategorySection: View {
                         manager.addTask(key: dateKey, category: category, title: newTaskTitle, settings: settings)
                         newTaskTitle = ""
                     })
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(TaskInputStyle())
                     .font(.callout)
                 }
                 .padding(.vertical, 1)
@@ -230,7 +359,7 @@ struct TopThreeCategorySection: View {
                 // 固定分类已满 3 条
                 Text("已满 3 件，删除后可再添加")
                     .font(.caption2)
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundColor(hintColor)
                     .padding(.leading, 8)
                     .padding(.vertical, 1)
             }
@@ -259,6 +388,7 @@ struct TopThreeCategorySection: View {
 
 // MARK: - Task Row (单条任务)
 struct TaskRow: View {
+    @Environment(\.appTheme) private var theme
     let task: TopThreeTask
     let editable: Bool
     let isEditing: Bool
@@ -278,27 +408,28 @@ struct TaskRow: View {
             if editable {
                 Button(action: onToggle) {
                     Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(task.isCompleted ? .green : .secondary)
+                        .foregroundColor(task.isCompleted ? completionColor : mutedColor)
                         .font(.system(size: 15))
+                        .modifier(TaskActionTarget())
                 }
                 .buttonStyle(.borderless)
             } else {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : (task.movedToToday ? "arrow.right.circle.fill" : "circle"))
-                    .foregroundColor(task.isCompleted ? .green : (task.movedToToday ? .blue : .secondary))
+                    .foregroundColor(task.isCompleted ? completionColor : (task.movedToToday ? movedColor : mutedColor))
                     .font(.system(size: 15))
                     .opacity(0.55)
             }
 
             if isEditing {
                 TextField("输入任务...", text: $draftTitle, onCommit: onCommitEdit)
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(TaskInputStyle())
                     .font(.callout)
                     .cancelOnExitCommand { onCancelEdit() }
             } else {
                 Text(displayTitle)
                     .font(.callout)
                     .foregroundColor(titleColor)
-                    .strikethrough(task.isCompleted, color: .secondary)
+                    .strikethrough(task.isCompleted, color: mutedColor)
                     .lineLimit(1)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -313,6 +444,10 @@ struct TaskRow: View {
                 Button(action: onMoveToToday) {
                     Image(systemName: "arrow.uturn.right")
                         .font(.system(size: 12))
+#if os(macOS)
+                        .foregroundColor(movedColor)
+#endif
+                        .modifier(TaskActionTarget())
                 }
                 .buttonStyle(.borderless)
                 .help("移动到今日")
@@ -322,7 +457,7 @@ struct TaskRow: View {
             if task.movedToToday {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11))
-                    .foregroundColor(.blue.opacity(0.7))
+                    .foregroundColor(movedColor.opacity(0.7))
                     .help("已移动到今日")
             }
 
@@ -331,7 +466,8 @@ struct TaskRow: View {
                 Button(action: { showDeleteConfirm = true }) {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .foregroundColor(mutedColor.opacity(0.7))
+                        .modifier(TaskActionTarget())
                 }
                 .buttonStyle(.borderless)
                 .help("删除任务")
@@ -341,7 +477,7 @@ struct TaskRow: View {
                 }
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, rowPadding)
         .padding(.leading, 8)
         .opacity(task.movedToToday ? 0.55 : 1)
     }
@@ -354,7 +490,73 @@ struct TaskRow: View {
     }
 
     private var titleColor: Color {
+#if os(macOS)
+        if task.title.isEmpty || task.isCompleted || !editable { return theme.muted }
+        return theme.ink
+#else
         if task.title.isEmpty { return .secondary.opacity(editable ? 0.7 : 0.4) }
         return editable ? .primary : .primary.opacity(0.65)
+#endif
+    }
+
+    private var mutedColor: Color {
+#if os(macOS)
+        return theme.muted
+#else
+        return .secondary
+#endif
+    }
+
+    private var completionColor: Color {
+#if os(macOS)
+        return theme.accent
+#else
+        return .green
+#endif
+    }
+
+    private var movedColor: Color {
+#if os(macOS)
+        return theme.accent
+#else
+        return .blue
+#endif
+    }
+
+    private var rowPadding: CGFloat {
+#if os(macOS)
+        return theme.style == .garden ? 4 : 2
+#else
+        return 1
+#endif
+    }
+}
+
+private struct TaskInputStyle: ViewModifier {
+    @Environment(\.appTheme) private var theme
+
+    func body(content: Content) -> some View {
+#if os(macOS)
+        content
+            .textFieldStyle(.plain)
+            .foregroundColor(theme.ink)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(theme.subtle))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
+            .tint(theme.accent)
+#else
+        content.textFieldStyle(.roundedBorder)
+#endif
+    }
+}
+
+private struct TaskActionTarget: ViewModifier {
+    func body(content: Content) -> some View {
+#if os(macOS)
+        content.frame(minWidth: 24, minHeight: 26).contentShape(Rectangle())
+#else
+        content
+#endif
     }
 }

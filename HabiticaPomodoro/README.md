@@ -6,7 +6,7 @@
 
 **Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。
 
-> **版本状态（2026-10-26）**：macOS **v1.2.6** 已发布，新增三套可切换界面风格（清新原生 / 留白花园 / 效率工作台；右上角调色板或 设置 → 外观）。iOS / Android 仍为 v1.2.5，尚未接入移动端风格改造。业务与同步逻辑未改。
+> **版本状态（2026-10-28）**：macOS **[v1.2.7](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v1.2.7)** 补齐任务、习惯、每日、角色四页的三套皮肤与深浅色适配，工作台采用任务日期与角色信息分栏，修复花园风格滚动与留白。右上角调色板或 设置 → 外观 可切换风格。iOS / Android 仍为 v1.2.5，业务与同步逻辑未改。
 
 ## 功能特性
 
@@ -177,7 +177,7 @@ bash build_ios.sh    # 生成工程 → 编译 → 安装到 iPhone 17 模拟器
 
 从仓库根运行 `python3 HabiticaPomodoro/fixtures/run.py --work "$HOME/Library/Caches/HabiticaPomodoroFixtures"`，覆盖真实七文件重载/慢读/本地写竞争，以及 Apple 音频暂停和试听生命周期。音频 transport 为替身，不联网、不出声；详见 [fixtures/README.md](fixtures/README.md)。Android 套件及 JDK 21 配置见 [Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md)。
 
-CI 已配置 master push、PR、tag 与手动触发；先安装依赖并运行两端离线套件，再生成 DMG/未签名 IPA/APK。工作区的 CI 修改尚未推送，不能称远端已绿；真实声音、锁屏后台、账号切换与 iCloud 系统传送仍需人工验收。
+CI 已配置 master push、PR、tag 与手动触发；先安装依赖并运行两端离线套件，再生成 DMG/未签名 IPA/APK。远端结果以 GitHub Actions 实际记录为准；真实声音、锁屏后台、账号切换与 iCloud 系统传送仍需分别验收。
 
 ## License
 

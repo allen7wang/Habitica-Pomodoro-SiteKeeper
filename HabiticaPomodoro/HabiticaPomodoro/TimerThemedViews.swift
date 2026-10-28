@@ -192,17 +192,19 @@ extension TimerView {
 
     @ViewBuilder var gardenLayout: some View {
         VStack(spacing: 0) {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 14) {
-                    HStack {
-                        Spacer(minLength: 0)
-                        paletteMenu
-                        headerIcon("clock.arrow.circlepath") { showHistoryWindow() }
-                        headerIcon("gearshape") { showSettings() }
-                    }
-                    .padding(.top, 12)
+            HStack {
+                Spacer(minLength: 0)
+                paletteMenu
+                headerIcon("clock.arrow.circlepath") { showHistoryWindow() }
+                headerIcon("gearshape") { showSettings() }
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
 
-                    if tabState.selectedTab == 0 {
+            if tabState.selectedTab == 0 {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 14) {
                         VStack(spacing: 5) {
                             Text("留一刻，给自己。")
                                 .font(.system(size: 23, weight: .regular))
@@ -226,12 +228,12 @@ extension TimerView {
                         blockCard
                         tasksCard
                         soundRow
-                    } else {
-                        themedTabContent
                     }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 18)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 18)
+            } else {
+                themedTabContent
             }
             bottomNav
         }
@@ -279,15 +281,12 @@ extension TimerView {
         switch tabState.selectedTab {
         case 1:
             TopThreeView()
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
         case 2:
-            HabiticaHabitsView().padding(.horizontal, 18).padding(.top, 8)
+            HabiticaHabitsView()
         case 3:
-            HabiticaDailiesView().padding(.horizontal, 18).padding(.top, 8)
+            HabiticaDailiesView()
         default:
-            HabiticaProfileView().padding(.horizontal, 18).padding(.top, 8)
+            HabiticaProfileView()
         }
     }
 

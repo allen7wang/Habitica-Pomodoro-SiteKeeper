@@ -1,7 +1,82 @@
 import SwiftUI
 
+#if os(macOS)
+/// Shared page chrome keeps connected, empty and error states aligned with the focus skin.
+private struct HabiticaPageChrome<Content: View>: View {
+    @Environment(\.appTheme) private var theme
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let detail: String?
+    let configured: Bool
+    let loading: Bool
+    let error: String?
+    let refresh: () -> Void
+    let content: Content
+
+    init(title: String, subtitle: String, symbol: String, detail: String? = nil,
+         configured: Bool, loading: Bool, error: String?, refresh: @escaping () -> Void,
+         @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.symbol = symbol
+        self.detail = detail
+        self.configured = configured
+        self.loading = loading
+        self.error = error
+        self.refresh = refresh
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: theme.pageSpacing) {
+            HStack(alignment: .top, spacing: 12) {
+                ThemedPageHeader(title: title, subtitle: subtitle, symbol: symbol, detail: detail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if configured {
+                    ThemeRefreshButton(loading: loading, action: refresh)
+                }
+            }
+            if configured, let error = error {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(theme.subtle))
+            }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, theme.pageInset)
+        .padding(.top, 16)
+        .padding(.bottom, 22)
+        .foregroundColor(theme.ink)
+        .tint(theme.accent)
+    }
+}
+
+private struct HabiticaLoadingState: View {
+    @Environment(\.appTheme) private var theme
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView().controlSize(.small)
+            Text("正在同步 Habitica…")
+                .font(.system(size: 12))
+                .foregroundColor(theme.muted)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+#endif
+
 // MARK: - Habits Tab (Habitica 习惯列表，支持 +/- 打分)
 struct HabiticaHabitsView: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
     @ObservedObject private var api = HabiticaAPI.shared
@@ -15,6 +90,15 @@ struct HabiticaHabitsView: View {
     @State private var accountGeneration = 0
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+            .task(id: accountSignature) { await load() }
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         Group {
             if !isConfigured {
                 notConfiguredView
@@ -152,6 +236,10 @@ struct HabiticaHabitsView: View {
 
 // MARK: - Habit Row
 struct HabitRow: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     let item: HabiticaTaskItem
     let onScore: (String) -> Void
     let scored: Bool
@@ -165,6 +253,14 @@ struct HabitRow: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         HStack(spacing: 0) {
             // 减分按钮
             Button(action: { onScore("down") }) {
@@ -223,6 +319,10 @@ struct HabitRow: View {
 
 // MARK: - Dailies Tab (今日打卡)
 struct HabiticaDailiesView: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
     @ObservedObject private var api = HabiticaAPI.shared
@@ -235,6 +335,15 @@ struct HabiticaDailiesView: View {
     @State private var accountGeneration = 0
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+            .task(id: accountSignature) { await load() }
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         Group {
             if !isConfigured {
                 VStack(spacing: 8) {
@@ -355,11 +464,23 @@ struct HabiticaDailiesView: View {
 
 // MARK: - Daily Row
 struct DailyRow: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     let item: HabiticaTaskItem
     let busy: Bool
     let onToggle: () -> Void
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         HStack(spacing: 10) {
             Button(action: onToggle) {
                 Image(systemName: item.completed ? "checkmark.square.fill" : "square")
@@ -399,6 +520,10 @@ struct DailyRow: View {
 
 // MARK: - Role Tab (Habitica 角色信息：血量/法力/经验/属性)
 struct HabiticaProfileView: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     @ObservedObject var engine = PomodoroEngine.shared
     @ObservedObject var settingsManager = SettingsManager.shared
     @ObservedObject private var api = HabiticaAPI.shared
@@ -409,6 +534,15 @@ struct HabiticaProfileView: View {
     @State private var loadGeneration = 0
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+            .task(id: accountSignature) { await load() }
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         Group {
             if !isConfigured {
                 VStack(spacing: 8) {
@@ -585,6 +719,10 @@ struct HabiticaProfileView: View {
 
 // MARK: - StatBar
 struct StatBar: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     let icon: String
     let color: Color
     let label: String
@@ -593,6 +731,14 @@ struct StatBar: View {
     var valueText: String? = nil
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .foregroundColor(color)
@@ -622,11 +768,23 @@ struct StatBar: View {
 
 // MARK: - AttrCell
 struct AttrCell: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     let name: String
     let value: Int
     let color: Color
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         HStack {
             Text(name)
                 .font(.caption)
@@ -647,10 +805,22 @@ struct AttrCell: View {
 
 // MARK: - AchieveCell
 struct AchieveCell: View {
+    #if os(macOS)
+    @Environment(\.appTheme) private var theme
+    #endif
+
     let name: String
     let value: String
 
     var body: some View {
+        #if os(macOS)
+        themedBody
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         HStack {
             Text(name)
                 .font(.caption)
@@ -667,3 +837,322 @@ struct AchieveCell: View {
         )
     }
 }
+
+#if os(macOS)
+// MARK: - Habitica pages in the active Mac skin
+
+extension HabiticaHabitsView {
+    private var themedBody: some View {
+        HabiticaPageChrome(title: "习惯", subtitle: "每天一点，慢慢养成。", symbol: "sparkles",
+                           detail: isConfigured && !habits.isEmpty ? "\(habits.count) 项习惯" : nil,
+                           configured: isConfigured, loading: loading, error: api.lastError,
+                           refresh: { Task { await load() } }) {
+            if !isConfigured {
+                ThemedEmptyState(symbol: "person.badge.key", title: "连接你的 Habitica",
+                                 message: "在设置 → Habitica 中填入 User ID 与 API Token，开始记录习惯。")
+            } else if loading && habits.isEmpty {
+                HabiticaLoadingState()
+            } else if habits.isEmpty {
+                ThemedEmptyState(symbol: api.lastError == nil ? "sparkles" : "wifi.exclamationmark",
+                                 title: api.lastError == nil ? "还没有习惯" : "习惯加载失败",
+                                 message: api.lastError == nil ? "在 Habitica 添加习惯后，点击刷新同步到这里。" : "请检查网络连接，然后点击右上角刷新。")
+            } else {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: theme.rowSpacing) {
+                        ForEach(habits) { habit in
+                            HabitRow(item: habit, onScore: { direction in
+                                score(item: habit, direction: direction)
+                            }, scored: scoredIds.contains(habit.id), busy: inFlightIds.contains(habit.id))
+                        }
+                        Text("用 + 记录好习惯，用 − 提醒自己。弱项会排在前面。")
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                    }
+                    .padding(.bottom, 2)
+                }
+            }
+        }
+    }
+}
+
+extension HabitRow {
+    private var themedBody: some View {
+        HStack(spacing: 12) {
+            scoreButton("minus", direction: "down", enabled: item.canDown)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    Circle().fill(valueColor).frame(width: 6, height: 6)
+                    Text(String(format: "习惯值 %.1f", item.value))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(theme.muted)
+                    if scored {
+                        Text("· 已记录").font(.system(size: 10)).foregroundColor(theme.accent)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if busy {
+                ProgressView().controlSize(.small)
+            }
+            scoreButton(scored ? "checkmark" : "plus", direction: "up", enabled: item.canUp)
+        }
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+
+    private func scoreButton(_ symbol: String, direction: String, enabled: Bool) -> some View {
+        let available = enabled && !scored && !busy
+        return Button { onScore(direction) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(available ? (direction == "up" ? theme.onAccent : theme.muted) : theme.muted.opacity(0.5))
+                .frame(width: 32, height: 34)
+                .background(RoundedRectangle(cornerRadius: 8).fill(available && direction == "up" ? theme.accent : theme.subtle))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .disabled(!available)
+        .accessibilityLabel(direction == "up" ? "为\(item.text)加分" : "为\(item.text)减分")
+    }
+}
+
+extension HabiticaDailiesView {
+    private var themedBody: some View {
+        HabiticaPageChrome(title: "每日", subtitle: "把日常的小事，一件件做好。", symbol: "calendar",
+                           detail: isConfigured && !dailies.isEmpty ? "已完成 \(dailies.filter(\.completed).count) / \(dailies.count)" : nil,
+                           configured: isConfigured, loading: loading, error: api.lastError,
+                           refresh: { Task { await load() } }) {
+            if !isConfigured {
+                ThemedEmptyState(symbol: "person.badge.key", title: "连接你的 Habitica",
+                                 message: "在设置 → Habitica 中填入 User ID 与 API Token，查看每日打卡。")
+            } else if loading && dailies.isEmpty {
+                HabiticaLoadingState()
+            } else if dailies.isEmpty {
+                ThemedEmptyState(symbol: api.lastError == nil ? "calendar" : "wifi.exclamationmark",
+                                 title: api.lastError == nil ? "还没有每日任务" : "每日任务加载失败",
+                                 message: api.lastError == nil ? "在 Habitica 添加每日任务后，点击刷新同步到这里。" : "请检查网络连接，然后点击右上角刷新。")
+            } else {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: theme.rowSpacing) {
+                        ForEach(dailies) { daily in
+                            DailyRow(item: daily, busy: inFlightIds.contains(daily.id), onToggle: { toggle(item: daily) })
+                        }
+                    }
+                    .padding(.bottom, 2)
+                }
+            }
+        }
+    }
+}
+
+extension DailyRow {
+    private var themedBody: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggle) {
+                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 21, weight: .light))
+                    .foregroundColor(item.completed ? theme.accent : theme.muted)
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityLabel(item.completed ? "取消完成\(item.text)" : "完成\(item.text)")
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(item.completed ? theme.muted : theme.ink)
+                    .strikethrough(item.completed, color: theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !item.notes.isEmpty {
+                    Text(item.notes)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.muted)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if busy {
+                ProgressView().controlSize(.small)
+            } else if item.completed {
+                Text("已完成")
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.accent)
+            }
+        }
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+}
+
+extension HabiticaProfileView {
+    private var themedBody: some View {
+        HabiticaPageChrome(title: "角色", subtitle: "每一份努力，都在让你成长。", symbol: "person.crop.circle",
+                           configured: isConfigured, loading: loading, error: api.lastError,
+                           refresh: { Task { await load() } }) {
+            if !isConfigured {
+                ThemedEmptyState(symbol: "person.badge.key", title: "连接你的 Habitica",
+                                 message: "在设置 → Habitica 中填入 User ID 与 API Token，查看你的角色与成长记录。")
+            } else if loading && profile == nil {
+                HabiticaLoadingState()
+            } else if let p = profile {
+                ScrollView(showsIndicators: false) {
+                    if theme.style == .studio {
+                        HStack(alignment: .top, spacing: theme.pageSpacing) {
+                            VStack(spacing: theme.pageSpacing) {
+                                identityCard(p)
+                                resourcesCard(p)
+                            }.frame(maxWidth: .infinity)
+                            VStack(spacing: theme.pageSpacing) {
+                                attributesCard(p)
+                                achievementsCard(p)
+                            }.frame(maxWidth: .infinity)
+                        }
+                        .padding(.bottom, 2)
+                    } else {
+                        VStack(spacing: theme.pageSpacing) {
+                            identityCard(p)
+                            resourcesCard(p)
+                            attributesCard(p)
+                            achievementsCard(p)
+                        }
+                        .padding(.bottom, 2)
+                    }
+                }
+            } else {
+                ThemedEmptyState(symbol: "wifi.exclamationmark", title: "角色数据加载失败",
+                                 message: "请检查网络或 Habitica 服务状态，然后点击右上角刷新。")
+            }
+        }
+    }
+
+    private func identityCard(_ p: HabiticaProfile) -> some View {
+        HStack(spacing: 14) {
+            Text(p.username.prefix(1).uppercased())
+                .font(.system(size: 25, weight: .medium, design: .rounded))
+                .foregroundColor(theme.accent)
+                .frame(width: 58, height: 58)
+                .background(Circle().fill(theme.accentSoft))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("@\(p.username)")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(theme.ink)
+                    .lineLimit(1)
+                    .help(p.username)
+                Text(p.className.isEmpty ? "Lv.\(p.level)" : "\(p.className) · Lv.\(p.level)")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.muted)
+                Label(String(format: "%.2f GP", p.gp), systemImage: "dollarsign.circle")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundColor(theme.accent)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+
+    private func resourcesCard(_ p: HabiticaProfile) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("角色状态", symbol: "waveform.path.ecg")
+            StatBar(icon: "heart.fill", color: .red, label: "HP 生命", value: p.hp, maxValue: max(p.maxHealth, 50),
+                    valueText: String(format: "%.0f / %.0f", p.hp, max(p.maxHealth, 50)))
+            StatBar(icon: "sparkles", color: .blue, label: "MP 法力", value: p.mp, maxValue: max(p.maxMP, p.mp, 1),
+                    valueText: String(format: "%.0f", p.mp))
+            StatBar(icon: "star.fill", color: .purple, label: "EXP 经验", value: p.exp, maxValue: max(expInLevel(p), 1),
+                    valueText: String(format: "%.0f / %.0f", p.exp, expInLevel(p)))
+        }
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+
+    private func attributesCard(_ p: HabiticaProfile) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("能力属性", symbol: "square.grid.2x2")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: theme.rowSpacing) {
+                AttrCell(name: "STR 力量", value: p.str, color: .red)
+                AttrCell(name: "CON 体质", value: p.con, color: .orange)
+                AttrCell(name: "INT 智力", value: p.int, color: .blue)
+                AttrCell(name: "PER 感知", value: p.per, color: .green)
+            }
+        }
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+
+    private func achievementsCard(_ p: HabiticaProfile) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("成长记录", symbol: "rosette")
+            VStack(spacing: theme.rowSpacing) {
+                AchieveCell(name: "连续完美天数", value: "\(p.streak)")
+                AchieveCell(name: "完美日总数", value: "\(p.perfectDays)")
+                AchieveCell(name: "任务卷轴", value: "\(p.questsTotal)")
+                AchieveCell(name: "注册时间", value: p.joinedAt.map { fmtDate($0) } ?? "—")
+            }
+        }
+        .themeCard(theme, padding: theme.cardPadding)
+    }
+
+    private func sectionTitle(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(theme.ink)
+    }
+}
+
+extension StatBar {
+    private var themedBody: some View {
+        VStack(spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).foregroundColor(color)
+                Text(label).foregroundColor(theme.muted)
+                Spacer(minLength: 4)
+                Text(valueText ?? String(format: "%.0f", value))
+                    .monospacedDigit()
+                    .foregroundColor(theme.ink)
+            }
+            .font(.system(size: 11))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(theme.subtle)
+                    Capsule().fill(color.opacity(theme.dark ? 0.9 : 0.75))
+                        .frame(width: max(0, min(1, value / max(maxValue, 0.001)) * geo.size.width))
+                }
+            }
+            .frame(height: 5)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension AttrCell {
+    private var themedBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(name).font(.system(size: 10)).foregroundColor(theme.muted)
+            Text("\(value)")
+                .font(.system(size: 19, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundColor(theme.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(theme.subtle))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension AchieveCell {
+    private var themedBody: some View {
+        HStack(spacing: 8) {
+            Text(name).font(.system(size: 11)).foregroundColor(theme.muted)
+            Spacer(minLength: 0)
+            Text(value).font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(theme.ink)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 8).fill(theme.subtle))
+        .accessibilityElement(children: .combine)
+    }
+}
+#endif

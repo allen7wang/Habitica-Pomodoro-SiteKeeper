@@ -74,6 +74,11 @@ struct AppTheme {
     let accentSoft: Color
     let onAccent: Color
 
+    var pageInset: CGFloat { style == .garden ? 26 : 22 }
+    var pageSpacing: CGFloat { style == .garden ? 18 : 14 }
+    var cardPadding: CGFloat { style == .garden ? 18 : 14 }
+    var rowSpacing: CGFloat { style == .garden ? 10 : 8 }
+
     init(style: AppUIStyle, dark: Bool) {
         self.style = style
         self.dark = dark
@@ -191,6 +196,7 @@ struct PrimaryActionStyle: ButtonStyle {
 }
 
 struct QuietButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     let theme: AppTheme
 
     func makeBody(configuration: Configuration) -> some View {
@@ -207,6 +213,98 @@ struct QuietButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(theme.line, lineWidth: 1)
             )
+            .opacity(isEnabled ? 1 : 0.45)
+    }
+}
+
+/// Shared page furniture keeps secondary tabs in the same visual language as focus.
+struct ThemedPageHeader: View {
+    @Environment(\.appTheme) private var theme
+    let title: String
+    let subtitle: String
+    let symbol: String
+    var detail: String? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(theme.accent)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 10).fill(theme.accentSoft))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: theme.style == .garden ? 21 : 18, weight: .medium))
+                    .foregroundColor(theme.ink)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if let detail = detail {
+                Text(detail)
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundColor(theme.accent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(theme.accentSoft))
+                    .fixedSize()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct ThemedEmptyState: View {
+    @Environment(\.appTheme) private var theme
+    let symbol: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 24, weight: .light))
+                .foregroundColor(theme.accent)
+                .frame(width: 54, height: 54)
+                .background(Circle().fill(theme.accentSoft))
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(theme.ink)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 170)
+        .themeCard(theme, padding: theme.cardPadding)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct ThemeRefreshButton: View {
+    @Environment(\.appTheme) private var theme
+    let loading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if loading {
+                    ProgressView().controlSize(.small).tint(theme.accent)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+                Text(loading ? "刷新中…" : "刷新")
+            }
+        }
+        .buttonStyle(QuietButtonStyle(theme: theme))
+        .disabled(loading)
     }
 }
 
