@@ -31,13 +31,14 @@ SOURCE_NAMES = (
     "PomodoroEngine.swift",
     "BlockNotificationManager.swift",
     "BlockRewardManager.swift",
+    "FocusReview.swift",
 )
 CASE_HELPERS = {
     "qishi_audio": ("audio_stubs.swift",),
     "foreground_recovery": ("audio_stubs.swift", "notification_stubs.swift", "activation_stubs.swift"),
 }
 EXCLUDED_CASES = {Path(helper).stem for helpers in CASE_HELPERS.values() for helper in helpers}
-SLOW_READ_CASES = {"file_monitor", "foreground_recovery"}
+SLOW_READ_CASES = {"cold_launch", "file_monitor", "foreground_recovery"}
 
 # A generated top-level preflight must precede every case's manager access.
 # The case itself is copied verbatim after this block into build/main.swift.

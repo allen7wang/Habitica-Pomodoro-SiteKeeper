@@ -7,6 +7,7 @@ extension TimerView {
     var theme: AppTheme { AppTheme(style: styleStore.style, dark: colorScheme == .dark) }
 
     var sideSettings: UserSettings { settingsManager.settings }
+    var selectedMacTab: MacAppTab { MacAppTab(rawValue: tabState.selectedTab) ?? .focus }
 
     // MARK: Shared header / navigation
 
@@ -31,8 +32,8 @@ extension TimerView {
             }
             Spacer(minLength: 0)
             paletteMenu
-            headerIcon("clock.arrow.circlepath") { showHistoryWindow() }
-            headerIcon("gearshape") { showSettings() }
+            headerIcon("clock.arrow.circlepath", title: "专注复盘") { showFocusReview() }
+            headerIcon("gearshape", title: "设置") { showSettings() }
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
@@ -64,7 +65,7 @@ extension TimerView {
         .help("切换界面风格")
     }
 
-    func headerIcon(_ symbol: String, action: @escaping () -> Void) -> some View {
+    func headerIcon(_ symbol: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
@@ -73,26 +74,26 @@ extension TimerView {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .help(title)
     }
-
-    var navTitles: [String] { ["专注", "任务", "习惯", "每日", "角色"] }
-    var navSymbols: [String] { ["timer", "checklist", "sparkles", "calendar", "person.crop.circle"] }
 
     var mintNav: some View {
         HStack(spacing: 2) {
-            ForEach(0..<5, id: \.self) { index in
-                Button { tabState.selectedTab = index } label: {
-                    Text(navTitles[index])
-                        .font(.system(size: 11, weight: tabState.selectedTab == index ? .semibold : .regular))
-                        .foregroundColor(tabState.selectedTab == index ? theme.accent : theme.muted)
+            ForEach(MacAppTab.allCases) { tab in
+                Button { tabState.selectedTab = tab.rawValue } label: {
+                    Text(tab.title)
+                        .font(.system(size: 11, weight: selectedMacTab == tab ? .semibold : .regular))
+                        .foregroundColor(selectedMacTab == tab ? theme.accent : theme.muted)
                         .frame(maxWidth: .infinity, minHeight: 30)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(tabState.selectedTab == index ? theme.surface : Color.clear)
+                                .fill(selectedMacTab == tab ? theme.surface : Color.clear)
                         )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedMacTab == tab ? .isSelected : [])
             }
         }
         .padding(3)
@@ -105,17 +106,19 @@ extension TimerView {
 
     var bottomNav: some View {
         HStack(spacing: 0) {
-            ForEach(0..<5, id: \.self) { index in
-                Button { tabState.selectedTab = index } label: {
+            ForEach(MacAppTab.allCases) { tab in
+                Button { tabState.selectedTab = tab.rawValue } label: {
                     VStack(spacing: 4) {
-                        Image(systemName: navSymbols[index]).font(.system(size: 14))
-                        Text(navTitles[index]).font(.system(size: 9))
+                        Image(systemName: tab.symbol).font(.system(size: 14))
+                        Text(tab.title).font(.system(size: 9))
                     }
-                    .foregroundColor(tabState.selectedTab == index ? theme.accent : theme.muted)
+                    .foregroundColor(selectedMacTab == tab ? theme.accent : theme.muted)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(selectedMacTab == tab ? .isSelected : [])
             }
         }
         .padding(.vertical, 4)
@@ -138,23 +141,25 @@ extension TimerView {
             .padding(.horizontal, 10)
             .padding(.bottom, 12)
 
-            ForEach(0..<5, id: \.self) { index in
-                Button { tabState.selectedTab = index } label: {
+            ForEach(MacAppTab.allCases) { tab in
+                Button { tabState.selectedTab = tab.rawValue } label: {
                     HStack(spacing: 9) {
-                        Image(systemName: navSymbols[index]).font(.system(size: 13))
-                        Text(navTitles[index]).font(.system(size: 12, weight: tabState.selectedTab == index ? .semibold : .regular))
+                        Image(systemName: tab.symbol).font(.system(size: 13))
+                        Text(tab.title).font(.system(size: 12, weight: selectedMacTab == tab ? .semibold : .regular))
                         Spacer(minLength: 0)
                     }
-                    .foregroundColor(tabState.selectedTab == index ? theme.accent : theme.muted)
+                    .foregroundColor(selectedMacTab == tab ? theme.accent : theme.muted)
                     .padding(.horizontal, 10)
                     .frame(height: 34)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(tabState.selectedTab == index ? theme.accentSoft : Color.clear)
+                            .fill(selectedMacTab == tab ? theme.accentSoft : Color.clear)
                     )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(selectedMacTab == tab ? .isSelected : [])
             }
             Spacer(minLength: 0)
         }
@@ -170,7 +175,7 @@ extension TimerView {
         VStack(spacing: 0) {
             headerBar()
             mintNav
-            if tabState.selectedTab == 0 {
+            if selectedMacTab == .focus {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 16) {
                         focusHeading
@@ -195,14 +200,14 @@ extension TimerView {
             HStack {
                 Spacer(minLength: 0)
                 paletteMenu
-                headerIcon("clock.arrow.circlepath") { showHistoryWindow() }
-                headerIcon("gearshape") { showSettings() }
+                headerIcon("clock.arrow.circlepath", title: "专注复盘") { showFocusReview() }
+                headerIcon("gearshape", title: "设置") { showSettings() }
             }
             .padding(.horizontal, 22)
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            if tabState.selectedTab == 0 {
+            if selectedMacTab == .focus {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 14) {
                         VStack(spacing: 5) {
@@ -244,7 +249,7 @@ extension TimerView {
             sidebar
             VStack(spacing: 0) {
                 headerBar()
-                if tabState.selectedTab == 0 {
+                if selectedMacTab == .focus {
                     ScrollView(showsIndicators: false) {
                         HStack(alignment: .top, spacing: 22) {
                             VStack(spacing: 14) {
@@ -278,15 +283,19 @@ extension TimerView {
     }
 
     @ViewBuilder var themedTabContent: some View {
-        switch tabState.selectedTab {
-        case 1:
+        switch selectedMacTab {
+        case .tasks:
             TopThreeView()
-        case 2:
+        case .habits:
             HabiticaHabitsView()
-        case 3:
+        case .dailies:
             HabiticaDailiesView()
-        default:
+        case .role:
             HabiticaProfileView()
+        case .review:
+            FocusReviewView()
+        case .focus:
+            EmptyView()
         }
     }
 
@@ -552,7 +561,7 @@ extension TimerView {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(theme.ink)
                 Spacer(minLength: 0)
-                Button("全部任务") { tabState.selectedTab = 1 }
+                Button("全部任务") { tabState.selectedTab = MacAppTab.tasks.rawValue }
                     .buttonStyle(.plain)
                     .font(.system(size: 10))
                     .foregroundColor(theme.muted)
@@ -565,7 +574,7 @@ extension TimerView {
                     .padding(.vertical, 2)
             } else {
                 ForEach(todaysFocusTasks) { row in
-                    Button { tabState.selectedTab = 1 } label: {
+                    Button { tabState.selectedTab = MacAppTab.tasks.rawValue } label: {
                         HStack(spacing: 8) {
                             Image(systemName: row.isCompleted ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 12))

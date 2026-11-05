@@ -250,10 +250,14 @@ struct TopThreeTask: Codable, Identifiable, Equatable {
     var title: String
     var isCompleted: Bool = false
     var habiticaTaskId: String? = nil // 对应的 Habitica todo id
-    var movedToToday: Bool = false    // 昨天任务已移动到今日
+    var movedToToday: Bool = false    // 原日期保留的已转移副本
     var syncPending: Bool = false
     var cloudAccount: String? = nil // UID + canonical HTTPS API root; never credentials
     var cloudCreateAttempt: CloudCreateAttempt? = nil
+
+    var isUnfinished: Bool {
+        !isCompleted && !movedToToday && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     enum CodingKeys: String, CodingKey { case id, title, isCompleted, habiticaTaskId, movedToToday, syncPending, cloudAccount, cloudCreateAttempt }
 

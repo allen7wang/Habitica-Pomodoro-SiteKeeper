@@ -49,8 +49,8 @@ and a final case count, exits nonzero on failure, and writes `results.json`.
 
 The centralized `SOURCE_NAMES` tuple in `run.py` lists the real production
 sources: `Managers.swift`, `HabiticaAPI.swift`, `PlantJournal.swift`,
-`PomodoroEngine.swift`, `BlockNotificationManager.swift`, and
-`BlockRewardManager.swift`. They are copied **byte-for-byte**, never rewritten,
+`PomodoroEngine.swift`, `BlockNotificationManager.swift`, `BlockRewardManager.swift`,
+and `FocusReview.swift`. They are copied **byte-for-byte**, never rewritten,
 and compiled with `-D DEBUG -swift-version 5`. Only the selected case is put into
 generated `main.swift`, after the runner's isolation preflight, so Swift's
 executable top-level rules are respected. Each executable is placed inside a
@@ -63,6 +63,13 @@ the unique ID separates its UserDefaults domain from the installed app.
 Add shared source dependencies in that one tuple rather than changing
 per-case commands.
 
+- **`cold_launch`** exercises the production Mac startup snapshot before any
+  data manager initializes. It rejects a synthetic data path that is a regular
+  file, then retries with a valid folder. A native delay on the synthetic settings
+  file must leave the main run loop responsive while the read is in flight.
+  The main-thread completion warms real managers from the scoped snapshot without
+  a second settings read, and missing files are accepted. This exercises startup
+  data loading without launching an app or requesting Documents permission.
 - **`file_monitor`** exercises real managers, the real seven-file monitor,
   Foundation/Combine, serialization, background snapshots, and local writes.
   Its settings have `connectHabitica = false`, an empty UID, and an empty token.
@@ -99,8 +106,9 @@ per-case commands.
   elapsed focus-break-grace counting and heartbeat responsiveness.
   `audio_stubs.swift` prevents audio/network output;
   `notification_stubs.swift` shadows only notification delivery (real request
-  and content value objects remain). `activation_stubs.swift` replaces the
-  iOS grant/status owner: **no real bookmark or security-scoped API executes**.
+  and content value objects remain). `activation_stubs.swift` provides the
+  ready state for Mac activation and replaces the iOS grant/status owner.
+  No real bookmark or security-scoped API executes.
   A folder change during recovery pauses the unchanged old phase rather than
   letting a later scheduled tick settle it into a different folder.
 - **`dirty_reload`** uses all seven real stores, permission-induced failed
@@ -109,6 +117,10 @@ per-case commands.
   while bad JSON and synchronous subscriber/notification failed edits remain
   protected. Histogram same-path unsaved deltas are not considered discarded.
   The monitor's ordinary `consume`/scan path must not clear dirty ownership.
+- **`focus_review`** checks the read-only aggregation using synthetic
+  histogram, block, and plant records. It covers empty dates, DST, leap day,
+  year boundaries, legacy block data, explicit plant markers, and the daily
+  CSV schema. The case initializes no managers and makes no storage writes.
 
 ## Isolation and limits
 

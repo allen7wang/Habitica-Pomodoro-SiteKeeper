@@ -24,17 +24,21 @@ enum PomodoroDataDir {
             }
         }
     }
-    #endif
 
-    /// Select the data location separately from Mac directory creation during polling.
-    static var resolvedURL: URL {
-        #if DEBUG
+    static var debugDirectoryOverride: URL? {
         // UI verification only: never used by release builds.
         if let override = ProcessInfo.processInfo.environment["POMODORO_ISOLATED_DIR"],
            !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        if let isolated = isolatedDirectory { return isolated }
+        return isolatedDirectory
+    }
+    #endif
+
+    /// Select the data location separately from Mac directory creation during polling.
+    static var resolvedURL: URL {
+        #if DEBUG
+        if let override = debugDirectoryOverride { return override }
         #endif
         #if os(iOS)
         // iOS：用户通过文件选择器授权 iCloud Drive 目录后，数据落在
@@ -95,7 +99,7 @@ enum PomodoroDataDir {
     static func migrateOldFiles() {
         if PomodoroFileChanges.shared.prefetchedDirectory != nil { return }
         #if DEBUG
-        if isolatedDirectory != nil { return }
+        if debugDirectoryOverride != nil { return }
         #endif
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let oldNames = dataFileNames
@@ -128,6 +132,9 @@ final class PomodoroFileChanges {
     private var directoryGeneration = 0
     private var prefetched: [String: Result<Data, Error>]?
     private(set) var prefetchedDirectory: URL?
+    #if os(macOS)
+    private var preparingMacLaunch = false
+    #endif
 
     struct DirectoryIdentity: Equatable {
         let url: URL
@@ -194,13 +201,122 @@ final class PomodoroFileChanges {
         if let result = prefetched?[url.standardizedFileURL.path] {
             switch result {
             case .success: return true
-            case .failure(let error):
-                let nsError = error as NSError
-                return !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError)
+            case .failure(let error): return !Self.isMissingFile(error)
             }
         }
         return FileManager.default.fileExists(atPath: url.path)
     }
+
+    private static func isMissingFile(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain &&
+                (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError)) ||
+               (error.domain == NSPOSIXErrorDomain && error.code == Int(POSIXErrorCode.ENOENT.rawValue))
+    }
+
+    #if os(macOS)
+    /// Call after showing the launch window. Warm the shared managers synchronously inside a
+    /// successful completion so their initial reads consume the accepted snapshot on main.
+    func prepareForMacLaunch(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.prepareForMacLaunch(completion: completion) }
+            return
+        }
+        guard !preparingMacLaunch, !reading else {
+            completion(.failure(CocoaError(.fileLocking)))
+            return
+        }
+        preparingMacLaunch = true
+        let identity = directoryIdentity()
+        #if DEBUG
+        let migrateLegacy = PomodoroDataDir.debugDirectoryOverride == nil
+        #else
+        let migrateLegacy = true
+        #endif
+        readerQueue.async {
+            let result = Result { try Self.readMacLaunchSnapshot(directory: identity.url, migrateLegacy: migrateLegacy) }
+            DispatchQueue.main.async {
+                guard self.directoryIdentity() == identity else {
+                    self.preparingMacLaunch = false
+                    completion(.failure(CocoaError(.userCancelled)))
+                    return
+                }
+                switch result {
+                case .success(let snapshot):
+                    self.prefetched = snapshot
+                    self.prefetchedDirectory = identity.url
+                    defer {
+                        self.prefetched = nil
+                        self.prefetchedDirectory = nil
+                        self.preparingMacLaunch = false
+                    }
+                    completion(.success(()))
+                case .failure(let error):
+                    self.preparingMacLaunch = false
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private static func readMacLaunchSnapshot(directory: URL, migrateLegacy: Bool) throws -> [String: Result<Data, Error>] {
+        let fm = FileManager.default
+        let parent = directory.deletingLastPathComponent()
+        // A throwing directory read distinguishes denial from absence and may prompt for access.
+        // Do it before any destination creation or legacy migration, on the reader queue.
+        let parentEntries = Set(try fm.contentsOfDirectory(atPath: parent.path))
+        do {
+            _ = try fm.contentsOfDirectory(atPath: directory.path)
+        } catch where isMissingFile(error) {
+            do {
+                try fm.createDirectory(at: directory, withIntermediateDirectories: false)
+            } catch where isExistingFile(error) {
+                _ = try fm.contentsOfDirectory(atPath: directory.path)
+            }
+        }
+
+        let urls = PomodoroDataDir.dataFileNames.map { directory.appendingPathComponent($0) }
+        var snapshot = try Dictionary(uniqueKeysWithValues: urls.map { url in
+            (url.path, try readMacLaunchFile(at: url))
+        })
+        if migrateLegacy {
+            for url in urls where parentEntries.contains(url.lastPathComponent) {
+                guard case .failure = snapshot[url.path] else { continue }
+                let oldURL = parent.appendingPathComponent(url.lastPathComponent)
+                if case .success = try readMacLaunchFile(at: oldURL) {
+                    do {
+                        // moveItem fails if another writer creates the destination first.
+                        try fm.moveItem(at: oldURL, to: url)
+                    } catch where isMissingFile(error) || isExistingFile(error) {
+                        // A concurrent move/create can change either path. Read the destination again.
+                    }
+                }
+                snapshot[url.path] = try readMacLaunchFile(at: url)
+            }
+        }
+        return snapshot
+    }
+
+    private static func readMacLaunchFile(at url: URL) throws -> Result<Data, Error> {
+        do { return .success(try Data(contentsOf: url)) }
+        catch let readError where isMissingFile(readError) {
+            do {
+                _ = try FileManager.default.attributesOfItem(atPath: url.path)
+            } catch where isMissingFile(error) {
+                return .failure(readError)
+            }
+            // A path that exists may have become readable or point at unavailable data.
+            // A second missing read here is a startup error, not a signal to use defaults.
+            return .success(try Data(contentsOf: url))
+        }
+    }
+
+    private static func isExistingFile(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError) ||
+               (error.domain == NSPOSIXErrorDomain && error.code == Int(POSIXErrorCode.EEXIST.rawValue))
+    }
+    #endif
 
     /// Single-flight asynchronous polling, also used at launch and foreground activation.
     /// Explicit save-all callers wait for completion before writing their in-memory state.
@@ -282,8 +398,7 @@ final class PomodoroFileChanges {
             guard dirtyPaths[path] == nil, let result = prefetched[path] else { return false }
             switch result {
             case .failure(let error):
-                let nsError = error as NSError
-                guard nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError else { return false }
+                guard Self.isMissingFile(error) else { return false }
             case .success(let data):
                 let decoder = JSONDecoder()
                 switch name {
@@ -743,6 +858,14 @@ enum WidgetBridge {
 }
 #endif
 
+struct UnfinishedTask: Identifiable {
+    let dateKey: String
+    let category: Int
+    let task: TopThreeTask
+
+    var id: UUID { task.id }
+}
+
 class TopThreeManager: ObservableObject {
     static let shared = TopThreeManager()
 
@@ -941,15 +1064,16 @@ class TopThreeManager: ObservableObject {
     }
 
     // MARK: 任务读写（按分类，统一为自由列表式交互；Work/MyOwn 上限 3 条）
-    private func ensureDay(key: String) {
-        if store.history[key] == nil {
-            store.history[key] = TopThreeDay(date: key)
-        }
-        var day = store.history[key]!
+    private func dayWithCategories(key: String) -> TopThreeDay {
+        var day = store.history[key] ?? TopThreeDay(date: key)
         while day.taskGroups.count < categoryCount {
             day.taskGroups.append([])
         }
-        store.history[key] = day
+        return day
+    }
+
+    private func ensureDay(key: String) {
+        store.history[key] = dayWithCategories(key: key)
     }
 
     // 任务上限：固定分类（Work/MyOwn）最多 3 条，琐事不限
@@ -958,7 +1082,7 @@ class TopThreeManager: ObservableObject {
     }
 
     func canAddTask(key: String, category: Int, settings: UserSettings) -> Bool {
-        guard isEditable(key: key, settings: settings) else { return false }
+        guard store.categoryNames.indices.contains(category), isEditable(key: key, settings: settings) else { return false }
         if let limit = taskLimit(category: category) {
             return getTasks(key: key, category: category).count < limit
         }
@@ -1026,12 +1150,29 @@ class TopThreeManager: ObservableObject {
         return []
     }
 
-    // 统一删除任务（所有分类相同交互）
-    func removeTask(key: String, category: Int, id: UUID, settings: UserSettings) {
+    func unfinishedTasks(before today: String) -> [UnfinishedTask] {
+        var seen: Set<UUID> = []
+        var tasks: [UnfinishedTask] = []
+        for key in store.history.keys.sorted(by: >) {
+            guard let day = store.history[key] else { continue }
+            for (category, group) in day.taskGroups.enumerated() {
+                for task in group where !task.movedToToday && seen.insert(task.id).inserted {
+                    if key < today, category < categoryCount, task.isUnfinished {
+                        tasks.append(UnfinishedTask(dateKey: key, category: category, task: task))
+                    }
+                }
+            }
+        }
+        return tasks
+    }
+
+    func removeTask(key: String, category: Int, id: UUID, settings: UserSettings, fromUnfinished: Bool = false) {
+        let today = todayKey(settings: settings)
+        guard fromUnfinished ? key < today : key == today else { return }
         prepareCloudAccount(settings: settings)
-        guard isEditable(key: key, settings: settings),
-              let index = taskIndex(id: id, key: key, category: category),
-              var day = store.history[key] else { return }
+        guard let index = taskIndex(id: id, key: key, category: category),
+              var day = store.history[key],
+              !fromUnfinished || day.taskGroups[category][index].isUnfinished else { return }
         let task = day.taskGroups[category].remove(at: index)
         if let owner = task.cloudAccount {
             if let remoteId = task.habiticaTaskId { queueDeletion(remoteId, account: owner) }
@@ -1045,43 +1186,28 @@ class TopThreeManager: ObservableObject {
         }
     }
 
-    // MARK: 昨天未完成任务移动到今日
-
-    func canMoveToToday(key: String, settings: UserSettings) -> Bool {
-        return key == yesterdayKey(settings: settings)
-    }
-
     @discardableResult
     func moveTaskToToday(fromKey: String, category: Int, id: UUID, settings: UserSettings) -> Bool {
+        let today = todayKey(settings: settings)
+        guard fromKey < today, canAddTask(key: today, category: category, settings: settings) else { return false }
         prepareCloudAccount(settings: settings)
-        guard canMoveToToday(key: fromKey, settings: settings),
-              let index = taskIndex(id: id, key: fromKey, category: category) else { return false }
-        let todayK = todayKey(settings: settings)
-        ensureDay(key: todayK)
+        guard let index = taskIndex(id: id, key: fromKey, category: category),
+              var source = store.history[fromKey] else { return false }
+        var moved = source.taskGroups[category][index]
+        guard moved.isUnfinished else { return false }
 
-        guard var srcDay = store.history[fromKey],
-              srcDay.taskGroups.indices.contains(category),
-              srcDay.taskGroups[category].indices.contains(index) else { return false }
-        let task = srcDay.taskGroups[category][index]
-        guard !task.isCompleted, !task.movedToToday, !task.title.isEmpty else { return false }
-
-        var dstDay = store.history[todayK]!
-        // 统一为自由列表：直接追加（固定分类受 3 条上限约束）
-        if let limit = taskLimit(category: category),
-           dstDay.taskGroups[category].count >= limit {
-            return false // 今日该分类已满
-        }
-        var moved = task
-        moved.movedToToday = false
+        var destination = dayWithCategories(key: today)
         moved.syncPending = true
-        dstDay.taskGroups[category].append(moved)
+        if let archivedIndex = destination.taskGroups[category].firstIndex(where: { $0.id == id && $0.movedToToday }) {
+            destination.taskGroups[category][archivedIndex] = moved
+        } else {
+            destination.taskGroups[category].append(moved)
+        }
 
-        // 标记昨天任务已移动
-        srcDay.taskGroups[category][index].movedToToday = true
-        store.history[fromKey] = srcDay
-        store.history[todayK] = dstDay
+        source.taskGroups[category][index].movedToToday = true
+        store.history.merge([fromKey: source, today: destination]) { _, updated in updated }
         save()
-        syncTaskToHabitica(task: moved, category: category, key: todayK, settings: settings)
+        syncTaskToHabitica(task: moved, category: category, key: today, settings: settings)
         return true
     }
 

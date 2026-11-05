@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Top Three View (Task 页：Work / MyOwn / 琐事 × 今天 / 昨天)
+// MARK: - Top Three View
 struct TopThreeView: View {
     @ObservedObject var manager = TopThreeManager.shared
     @ObservedObject var settingsManager = SettingsManager.shared
@@ -46,8 +46,7 @@ struct TopThreeView: View {
                         TopThreeCategorySection(
                             dateKey: todayKey,
                             category: cat,
-                            editable: true,
-                            canMoveToToday: false
+                            editable: true
                         )
                     }
                 }
@@ -74,7 +73,7 @@ struct TopThreeView: View {
                             .font(.caption.monospaced())
                             .foregroundColor(.secondary)
                         Spacer()
-                        Text("已归档 · 未完成任务可 ➡ 移到今天")
+                        Text("已归档")
                             .font(.caption2)
                             .foregroundColor(.secondary.opacity(0.7))
                     }
@@ -83,8 +82,7 @@ struct TopThreeView: View {
                         TopThreeCategorySection(
                             dateKey: yesterdayKey,
                             category: cat,
-                            editable: false,
-                            canMoveToToday: true
+                            editable: false
                         )
                     }
                 }
@@ -97,6 +95,8 @@ struct TopThreeView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(theme.line.opacity(0.8), lineWidth: 1)
                 )
+
+                unfinishedSection
             }
             .padding(.top, 16)
             .padding(.bottom, 16)
@@ -142,6 +142,7 @@ struct TopThreeView: View {
                 daySection(key: todayKey, editable: true)
                 daySection(key: yesterdayKey, editable: false)
             }
+            unfinishedSection
         }
         .padding(.horizontal, theme.pageInset)
         .padding(.top, 16)
@@ -173,19 +174,94 @@ struct TopThreeView: View {
                         .foregroundColor(theme.muted)
                 }
             }
-            Text(editable ? "点击任务文字编辑，点击圆圈完成" : "未完成的任务可移到今天")
+            Text(editable ? "点击任务文字编辑，点击圆圈完成" : "已完成和已转移的任务")
                 .font(.system(size: 10))
                 .foregroundColor(theme.muted)
                 .padding(.bottom, 3)
 
             ForEach(0..<manager.categoryCount, id: \.self) { cat in
-                TopThreeCategorySection(dateKey: key, category: cat, editable: editable, canMoveToToday: !editable)
+                TopThreeCategorySection(dateKey: key, category: cat, editable: editable)
                     .themeCard(theme, padding: theme.cardPadding)
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 #endif
+
+    private var unfinishedSection: some View {
+        let today = todayKey
+        let tasks = manager.unfinishedTasks(before: today)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("未完成任务", systemImage: "tray")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Text("\(tasks.count) 件")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(unfinishedHintColor)
+            }
+            Text(tasks.isEmpty ? "没有跨天未完成的任务。" : "可以转到今天的原分类，也可以删除。")
+                .font(.caption)
+                .foregroundStyle(unfinishedHintColor)
+
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(tasks) { item in
+                    unfinishedRow(item, today: today)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+#if os(macOS)
+        .foregroundStyle(theme.ink)
+        .themeCard(theme, padding: theme.cardPadding)
+#else
+        .padding(14)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+#endif
+    }
+
+    private func unfinishedRow(_ item: UnfinishedTask, today: String) -> some View {
+        let canMove = manager.canAddTask(key: today, category: item.category, settings: settings)
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.task.title)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(item.dateKey) · \(manager.categoryName(index: item.category))")
+                    .font(.caption)
+                    .foregroundStyle(unfinishedHintColor)
+                if !canMove {
+                    Text("今日分类已满")
+                        .font(.caption2)
+                        .foregroundStyle(unfinishedHintColor)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                manager.moveTaskToToday(fromKey: item.dateKey, category: item.category, id: item.id, settings: settings)
+            } label: {
+                Image(systemName: "arrow.uturn.right")
+                    .font(.system(size: 12))
+                    .modifier(TaskActionTarget())
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canMove)
+            .accessibilityLabel("转到今天")
+            .help("转到今天")
+            TaskDeleteButton(color: unfinishedHintColor) {
+                manager.removeTask(key: item.dateKey, category: item.category, id: item.id, settings: settings, fromUnfinished: true)
+            }
+        }
+    }
+
+    private var unfinishedHintColor: Color {
+#if os(macOS)
+        theme.muted
+#else
+        .secondary
+#endif
+    }
 
     private func shortDate(_ key: String) -> String {
         let parts = key.split(separator: "-")
@@ -203,7 +279,6 @@ struct TopThreeCategorySection: View {
     let dateKey: String
     let category: Int
     let editable: Bool
-    let canMoveToToday: Bool
 
     @State private var editingUUID: UUID? = nil
     @State private var draftTitle: String = ""
@@ -212,7 +287,10 @@ struct TopThreeCategorySection: View {
     @State private var newTaskTitle: String = ""
 
     private var settings: UserSettings { settingsManager.settings }
-    private var tasks: [TopThreeTask] { manager.getTasks(key: dateKey, category: category) }
+    private var tasks: [TopThreeTask] {
+        let all = manager.getTasks(key: dateKey, category: category)
+        return editable ? all : all.filter { !$0.isUnfinished }
+    }
     private var completedCount: Int { tasks.filter { $0.isCompleted }.count }
     private var isFreeList: Bool { manager.isFreeList(category: category) }
 
@@ -301,7 +379,7 @@ struct TopThreeCategorySection: View {
 
 #if os(macOS)
             if tasks.isEmpty && !editable {
-                Text("这一天没有任务")
+                Text("没有归档任务")
                     .font(.system(size: 11))
                     .foregroundColor(theme.muted)
                     .padding(.vertical, 8)
@@ -315,7 +393,6 @@ struct TopThreeCategorySection: View {
                     editable: editable,
                     isEditing: editable && editingUUID == task.id,
                     draftTitle: $draftTitle,
-                    canMove: canMoveToToday && !task.isCompleted && !task.movedToToday && !task.title.isEmpty,
                     onToggle: {
                         manager.toggleTask(key: dateKey, category: category, id: task.id, settings: settings)
                     },
@@ -331,9 +408,6 @@ struct TopThreeCategorySection: View {
                         editingUUID = nil
                     },
                     onCancelEdit: { editingUUID = nil },
-                    onMoveToToday: {
-                        manager.moveTaskToToday(fromKey: dateKey, category: category, id: task.id, settings: settings)
-                    },
                     onDelete: editable ? {
                         manager.removeTask(key: dateKey, category: category, id: task.id, settings: settings)
                     } : nil
@@ -393,15 +467,11 @@ struct TaskRow: View {
     let editable: Bool
     let isEditing: Bool
     @Binding var draftTitle: String
-    let canMove: Bool
     let onToggle: () -> Void
     let onStartEdit: () -> Void
     let onCommitEdit: () -> Void
     let onCancelEdit: () -> Void
-    let onMoveToToday: () -> Void
     let onDelete: (() -> Void)?
-
-    @State private var showDeleteConfirm = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -439,20 +509,6 @@ struct TaskRow: View {
                 Spacer(minLength: 0)
             }
 
-            // 移动到今日按钮（昨天未完成任务）
-            if canMove {
-                Button(action: onMoveToToday) {
-                    Image(systemName: "arrow.uturn.right")
-                        .font(.system(size: 12))
-#if os(macOS)
-                        .foregroundColor(movedColor)
-#endif
-                        .modifier(TaskActionTarget())
-                }
-                .buttonStyle(.borderless)
-                .help("移动到今日")
-            }
-
             // 已移动标记
             if task.movedToToday {
                 Image(systemName: "checkmark.circle.fill")
@@ -463,18 +519,7 @@ struct TaskRow: View {
 
             // 删除按钮
             if let onDelete = onDelete {
-                Button(action: { showDeleteConfirm = true }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundColor(mutedColor.opacity(0.7))
-                        .modifier(TaskActionTarget())
-                }
-                .buttonStyle(.borderless)
-                .help("删除任务")
-                .confirmationDialog("确定删除这条任务？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-                    Button("删除", role: .destructive) { onDelete() }
-                    Button("取消", role: .cancel) {}
-                }
+                TaskDeleteButton(color: mutedColor, onDelete: onDelete)
             }
         }
         .padding(.vertical, rowPadding)
@@ -529,6 +574,28 @@ struct TaskRow: View {
 #else
         return 1
 #endif
+    }
+}
+
+private struct TaskDeleteButton: View {
+    let color: Color
+    let onDelete: () -> Void
+    @State private var showConfirm = false
+
+    var body: some View {
+        Button { showConfirm = true } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 12))
+                .foregroundColor(color.opacity(0.7))
+                .modifier(TaskActionTarget())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("删除任务")
+        .help("删除任务")
+        .confirmationDialog("确定删除这条任务？", isPresented: $showConfirm, titleVisibility: .visible) {
+            Button("删除", role: .destructive, action: onDelete)
+            Button("取消", role: .cancel) {}
+        }
     }
 }
 

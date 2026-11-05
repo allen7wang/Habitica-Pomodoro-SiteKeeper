@@ -8,37 +8,84 @@ struct HabiticaPomodoroApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // We use a menu-bar style window via AppDelegate.
-        // SwiftUI Settings scene for the settings window.
         Settings {
-            SettingsView()
+            MacDataGate(appDelegate: appDelegate) { SettingsView() }
         }
         .commands {
-            // Pomodoro 菜单: ⌘⇧P 启动/暂停
-            CommandMenu("Pomodoro") {
-                Button("Start/Pause Pomodoro") {
-                    PomodoroEngine.shared.togglePomodoro()
-                }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
+            MacPomodoroCommands(appDelegate: appDelegate)
+        }
+    }
+}
+
+private struct MacPomodoroCommands: Commands {
+    @ObservedObject var appDelegate: AppDelegate
+
+    var body: some Commands {
+        CommandMenu("Pomodoro") {
+            Button("Start/Pause Pomodoro") {
+                guard appDelegate.dataStatus == .ready else { return }
+                PomodoroEngine.shared.togglePomodoro()
             }
-            // View 菜单: ⌘1-5 切换 Tab
-            CommandMenu("Go") {
-                ForEach(Array(AppTabState.tabTitles.enumerated()), id: \.offset) { index, title in
-                    Button(title) {
-                        AppTabState.shared.selectedTab = index
-                        if let delegate = NSApp.delegate as? AppDelegate {
-                            delegate.ensureTimerWindowVisible()
-                        }
-                    }
-                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command])
+            .disabled(appDelegate.dataStatus != .ready)
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+        }
+        CommandMenu("Go") {
+            ForEach(MacAppTab.allCases) { tab in
+                Button(tab.menuTitle) {
+                    AppTabState.shared.selectedTab = tab.rawValue
+                    appDelegate.ensureTimerWindowVisible()
                 }
+                .keyboardShortcut(KeyEquivalent(Character("\(tab.rawValue + 1)")), modifiers: [.command])
             }
         }
     }
 }
 
+private struct MacDataGate<Content: View>: View {
+    @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject private var styleStore = UIStyleStore.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if appDelegate.dataStatus == .ready {
+            content()
+        } else {
+            let theme = AppTheme(style: styleStore.style, dark: colorScheme == .dark)
+            let failed = appDelegate.dataStatus == .unavailable
+            VStack(spacing: 14) {
+                Image(systemName: failed ? "folder.badge.questionmark" : "folder")
+                    .font(.system(size: 30))
+                    .foregroundStyle(theme.accent)
+                    .accessibilityHidden(true)
+                Text(failed ? "暂时无法读取记录" : "正在读取专注记录")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(theme.ink)
+                Text(failed
+                     ? "请检查 Habitica Pomodoro 的「文稿」访问权限和 iCloud Drive 状态，然后重试。"
+                     : "记录保存在「文稿」中。如果 macOS 询问访问权限，请允许 Habitica Pomodoro 读取原有记录。")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(theme.muted)
+                    .frame(maxWidth: 310)
+                if failed {
+                    Button("重试", action: appDelegate.loadStartupData)
+                } else {
+                    ProgressView().controlSize(.small).accessibilityLabel("正在读取专注记录")
+                }
+            }
+            .padding(24)
+            .frame(minWidth: 360, minHeight: 240)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(theme.background)
+        }
+    }
+}
+
 // MARK: - App Delegate (status bar + window management)
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, ObservableObject {
+    enum DataStatus { case waiting, loading, unavailable, ready }
+
+    @Published private(set) var dataStatus: DataStatus = .waiting
     var statusItem: NSStatusItem?
     var timerWindow: NSWindow?
     var settingsWindow: NSWindow?
@@ -51,10 +98,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request notification permission
-        UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-
         // Setup status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
@@ -70,6 +113,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             button.target = self
         }
 
+        showTimerWindow()
+        loadStartupData()
+    }
+
+    func loadStartupData() {
+        guard dataStatus == .waiting || dataStatus == .unavailable else { return }
+        dataStatus = .loading
+        PomodoroFileChanges.shared.prepareForMacLaunch { [weak self] result in
+            guard let self else { return }
+            guard case .success = result else {
+                self.dataStatus = .unavailable
+                return
+            }
+
+            // Initialize readers while the background snapshot is available on the main thread.
+            _ = SettingsManager.shared
+            _ = BlockProgressManager.shared
+            _ = TopThreeManager.shared
+            _ = PlantJournal.shared
+            _ = HistogramManager.shared
+            PomodoroEngine.shared.loadTodayCount()
+            self.dataStatus = .ready
+            DispatchQueue.main.async { self.startRuntimeServices() }
+        }
+    }
+
+    private func startRuntimeServices() {
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
         // Register for badge update notifications
         NotificationCenter.default.addObserver(
             self,
@@ -80,7 +153,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Start habitica sync
         Task { await PomodoroEngine.shared.initHabiticaTasks() }
-        PomodoroEngine.shared.loadTodayCount()
         PomodoroFileChanges.shared.startMonitoring()
 
         // Setup global hotkey via Carbon (Alt+Shift+P)
@@ -91,12 +163,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Start block notification timer
         BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
-
-        // Start with timer window visible
-        showTimerWindow()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard dataStatus == .ready else { return }
         PomodoroEngine.shared.resyncAfterForeground {
             BlockNotificationManager.shared.startReminderTimer(settings: SettingsManager.shared.settings)
         }
@@ -126,7 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func showTimerWindow() {
         if timerWindow == nil {
-            let contentView = TimerView()
+            let contentView = MacDataGate(appDelegate: self) { TimerView() }
             let hostingController = NSHostingController(rootView: contentView)
             timerWindow = NSWindow(contentViewController: hostingController)
             timerWindow?.title = "Habitica Pomodoro"
@@ -150,7 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // Update badge text and color
     private func updateBadge() {
-        guard let button = statusItem?.button else { return }
+        guard dataStatus == .ready, let button = statusItem?.button else { return }
 
         let engine = PomodoroEngine.shared
 
@@ -380,8 +450,8 @@ struct TimerView: View {
                 Button("Settings") {
                     showSettings()
                 }
-                Button("History") {
-                    showHistoryWindow()
+                Button("专注复盘") {
+                    showFocusReview()
                 }
                 Menu("休息") {
                     ForEach([1, 5, 15, 30], id: \.self) { minutes in
@@ -431,18 +501,8 @@ struct TimerView: View {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func showHistoryWindow() {
-        if let histWindow = NSApp.windows.first(where: { $0.title == "Pomodoro History" }) {
-            histWindow.makeKeyAndOrderFront(nil)
-        } else {
-            let hostingController = NSHostingController(rootView: HistoryView())
-            let window = NSWindow(contentViewController: hostingController)
-            window.title = "Pomodoro History"
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 480, height: 520))
-            window.center()
-            window.makeKeyAndOrderFront(nil)
-        }
+    func showFocusReview() {
+        tabState.selectedTab = MacAppTab.review.rawValue
     }
 }
 
@@ -742,7 +802,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Saved to Documents/.habitica-pomodoro")
                             .font(.body)
-                        Text(PomodoroDataDir.url.path)
+                        Text(PomodoroDataDir.resolvedURL.path)
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .textSelection(.enabled)
@@ -1052,97 +1112,5 @@ private struct PlantMarkerView: View {
         .frame(minWidth: 12, minHeight: 14)
         .accessibilityLabel(treeCount > 0 ? "种树 \(treeCount) 棵" :
             outcome == .shrub ? "灌木" : outcome == .wilted ? "枯萎" : "空种植位")
-    }
-}
-
-// MARK: - History View
-struct HistoryView: View {
-    @ObservedObject var hm = HistogramManager.shared
-    @State private var showClearConfirm = false
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Pomodoro History").font(.title2)
-
-            // Today summary
-            HStack(spacing: 40) {
-                VStack {
-                    Text("\(hm.getToday()?.pomodoros ?? 0)")
-                        .font(.system(size: 36, weight: .bold))
-                    Text("Today").font(.caption)
-                }
-                VStack {
-                    Text(String(format: "%.1f", Double(hm.getToday()?.minutes ?? 0) / 60.0))
-                        .font(.system(size: 36, weight: .bold))
-                    Text("Hours Today").font(.caption)
-                }
-            }
-
-            Divider()
-
-            // Totals
-            HStack(spacing: 30) {
-                VStack {
-                    Text("\(hm.totalPomodoros)")
-                        .font(.system(size: 28, weight: .semibold))
-                    Text("Total Pomodoros").font(.caption)
-                }
-                VStack {
-                    Text(String(format: "%.1f", hm.totalHours))
-                        .font(.system(size: 28, weight: .semibold))
-                    Text("Total Hours").font(.caption)
-                }
-                VStack {
-                    Text(String(format: "%.1f", hm.avgPomodoros))
-                        .font(.system(size: 28, weight: .semibold))
-                    Text("Daily Avg").font(.caption)
-                }
-            }
-
-            Divider()
-
-            // Bar chart
-            ScrollView {
-                HStack(alignment: .bottom, spacing: 8) {
-                    ForEach(lastN(14), id: \.0) { (date, day) in
-                        VStack {
-                            Text("\(day.pomodoros)")
-                                .font(.caption2)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.accentColor)
-                                .frame(width: 24, height: barHeight(day.pomodoros))
-                            Text(String(date.suffix(5)))
-                                .font(.caption2)
-                                .rotationEffect(.degrees(45))
-                        }
-                    }
-                }
-                .frame(height: 200)
-                .padding()
-            }
-
-            HStack {
-                Button("Clear History") { showClearConfirm = true }
-                .foregroundColor(.red)
-            }
-        }
-        .padding(24)
-        .confirmationDialog("清空番茄统计？时间块和种植历史不会被删除。",
-                            isPresented: $showClearConfirm, titleVisibility: .visible) {
-            Button("清空番茄统计", role: .destructive) {
-                hm.clear()
-                PomodoroEngine.shared.loadTodayCount()
-            }
-            Button("取消", role: .cancel) {}
-        }
-    }
-
-    func lastN(_ n: Int) -> [(String, DayHistogram)] {
-        Array(hm.sortedEntries.suffix(n))
-    }
-
-    func barHeight(_ value: Int) -> CGFloat {
-        let maxVal = max(1, hm.sortedEntries.map { $0.day.pomodoros }.max() ?? 1)
-        return CGFloat(value) / CGFloat(maxVal) * 150
     }
 }
