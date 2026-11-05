@@ -1230,6 +1230,7 @@ class TopThreeManager: ObservableObject {
             state.categoryTagIds.merge(old.categoryTagIds) { current, _ in current }
             state.pendingTagRenames.merge(old.pendingTagRenames) { current, _ in current }
             state.deletedCloudIds = Array(Set(state.deletedCloudIds + old.deletedCloudIds)).sorted()
+            state.confirmedDeletedCloudIds = Array(Set(state.confirmedDeletedCloudIds + old.confirmedDeletedCloudIds)).sorted()
             for intent in old.deletedCreateAttempts where !state.deletedCreateAttempts.contains(intent) {
                 state.deletedCreateAttempts.append(intent)
             }
@@ -1253,12 +1254,14 @@ class TopThreeManager: ObservableObject {
         if store.cloudAccount != account {
             if store.cloudAccount.isEmpty {
                 store.cloudStates[account] = TopThreeCloudState(categoryTagIds: store.categoryTagIds,
-                    deletedCloudIds: store.deletedCloudIds, pendingTagRenames: store.pendingTagRenames,
+                    deletedCloudIds: store.deletedCloudIds, confirmedDeletedCloudIds: store.confirmedDeletedCloudIds,
+                    pendingTagRenames: store.pendingTagRenames,
                     deletedCreateAttempts: store.deletedCreateAttempts)
             } else { rememberCloudState() }
             let state = store.cloudStates[account] ?? TopThreeCloudState()
             store.categoryTagIds = state.categoryTagIds
             store.deletedCloudIds = state.deletedCloudIds
+            store.confirmedDeletedCloudIds = state.confirmedDeletedCloudIds
             store.pendingTagRenames = state.pendingTagRenames
             store.deletedCreateAttempts = state.deletedCreateAttempts
             store.cloudAccount = account
@@ -1277,7 +1280,8 @@ class TopThreeManager: ObservableObject {
     private func rememberCloudState() {
         guard !store.cloudAccount.isEmpty else { return }
         store.cloudStates[store.cloudAccount] = TopThreeCloudState(categoryTagIds: store.categoryTagIds,
-            deletedCloudIds: store.deletedCloudIds, pendingTagRenames: store.pendingTagRenames,
+            deletedCloudIds: store.deletedCloudIds, confirmedDeletedCloudIds: store.confirmedDeletedCloudIds,
+            pendingTagRenames: store.pendingTagRenames,
             deletedCreateAttempts: store.deletedCreateAttempts)
     }
 
@@ -1294,6 +1298,7 @@ class TopThreeManager: ObservableObject {
     private func cloudState(owner: String) -> TopThreeCloudState {
         if owner == store.cloudAccount {
             return TopThreeCloudState(categoryTagIds: store.categoryTagIds, deletedCloudIds: store.deletedCloudIds,
+                confirmedDeletedCloudIds: store.confirmedDeletedCloudIds,
                 pendingTagRenames: store.pendingTagRenames, deletedCreateAttempts: store.deletedCreateAttempts)
         }
         return store.cloudStates[owner] ?? TopThreeCloudState()
@@ -1467,7 +1472,12 @@ class TopThreeManager: ObservableObject {
         guard isActiveOwner(owner), !syncingTasks.contains(id), let location = locate(id),
               location.task.syncPending, location.task.cloudAccount == owner else { return }
         syncingTasks.insert(id)
-        defer { syncingTasks.remove(id) }
+        defer {
+            syncingTasks.remove(id)
+            if isActiveOwner(owner), let message = HabiticaAPI.shared.rateLimitMessage(settings: settings) {
+                syncMessage = message + " 本机修改已保留。"
+            }
+        }
         for _ in 0..<4 {
             guard isActiveOwner(owner), let current = locate(id), current.task.syncPending,
                   current.task.cloudAccount == owner else { return }
@@ -1543,14 +1553,16 @@ class TopThreeManager: ObservableObject {
             guard hasIdentity(), let todos = fetched,
                   let todo = todos.first(where: { $0.id == remote }) else { return }
             guard hasRevision(revision) else { continue }
+            var confirmation = todo
             if todo.completed != task.isCompleted {
                 let scored = await HabiticaAPI.shared.scoreTodo(taskId: remote, completed: task.isCompleted, settings: settings)
                 guard hasIdentity(), scored else { return }
                 guard hasRevision(revision) else { continue }
+                let verified = await HabiticaAPI.shared.fetchTopThreeTodos(settings: settings)
+                guard hasIdentity(), let scoredTodo = verified?.first(where: { $0.id == remote }) else { return }
+                confirmation = scoredTodo
             }
-            // A successful PUT/score is not an acknowledgement: read back the entire pushed version.
-            let verified = await HabiticaAPI.shared.fetchTopThreeTodos(settings: settings)
-            guard hasIdentity(), let confirmation = verified?.first(where: { $0.id == remote }) else { return }
+            // The post-PUT read already verifies unchanged completion; only a score needs another read.
             guard hasRevision(revision) else { continue }
             guard confirmation.title == task.title, confirmation.completed == task.isCompleted,
                   confirmation.notes == notes, Set(confirmation.tags) == Set([tag]) else { return }
@@ -1661,6 +1673,15 @@ class TopThreeManager: ObservableObject {
         guard isActiveOwner(owner), !syncInProgress else { return }
         syncInProgress = true
         defer { syncInProgress = false }
+        func canContinue() -> Bool {
+            guard isActiveOwner(owner) else { return false }
+            if let message = HabiticaAPI.shared.rateLimitMessage(settings: settings) {
+                syncMessage = message + " 本机修改已保留。"
+                return false
+            }
+            return true
+        }
+        guard canContinue() else { return }
         // Resolve removed response-lost POSTs first; unresolved markers reserve their UUIDs.
         if !cloudState(owner: owner).deletedCreateAttempts.isEmpty {
             let generation = mutationGeneration
@@ -1669,25 +1690,33 @@ class TopThreeManager: ObservableObject {
                   resolveDeletedAttempts(todos, owner: owner) else { return }
         }
         await retryTagRenames(owner: owner, settings: settings)
-        guard isActiveOwner(owner) else { return }
+        guard canContinue() else { return }
         let pending = Set(store.history.values.flatMap { $0.taskGroups.flatMap { $0 } }
             .filter { $0.syncPending && $0.cloudAccount == owner }.map(\.id))
         for id in pending {
-            guard isActiveOwner(owner) else { return }
+            guard canContinue() else { return }
             await pushTask(id: id, settings: settings)
-            guard isActiveOwner(owner) else { return }
+            guard canContinue() else { return }
         }
-        for id in cloudState(owner: owner).deletedCloudIds {
+        let confirmed = Set(cloudState(owner: owner).confirmedDeletedCloudIds)
+        for id in cloudState(owner: owner).deletedCloudIds where !confirmed.contains(id) {
+            guard canContinue() else { return }
+            let deleted = await HabiticaAPI.shared.deleteTodo(taskId: id, settings: settings)
             guard isActiveOwner(owner) else { return }
-            _ = await HabiticaAPI.shared.deleteTodo(taskId: id, settings: settings)
-            guard isActiveOwner(owner) else { return }
+            if deleted, store.deletedCloudIds.contains(id), !store.confirmedDeletedCloudIds.contains(id) {
+                // Keep the tombstone for stale reads, persist the acknowledgement to retire HTTP work.
+                store.confirmedDeletedCloudIds.append(id)
+                guard save() else { return }
+            }
+            guard canContinue() else { return }
         }
-        guard isActiveOwner(owner) else { return }
+        guard canContinue() else { return }
         let generation = mutationGeneration
         let fetched = await HabiticaAPI.shared.fetchTopThreeTodos(settings: settings)
         guard isActiveOwner(owner) else { return }
         guard let todos = fetched else {
-            syncMessage = "同步失败，已保留本机任务；稍后可重试。"
+            syncMessage = (HabiticaAPI.shared.rateLimitMessage(settings: settings)
+                ?? "同步失败，稍后可重试。") + " 本机任务已保留。"
             return
         }
         guard generation == mutationGeneration else {
@@ -1698,6 +1727,7 @@ class TopThreeManager: ObservableObject {
         if hasDeletionConflict { return } // Do not overwrite manual-review feedback with success.
         let state = cloudState(owner: owner)
         let stillPending = !state.pendingTagRenames.isEmpty || !state.deletedCreateAttempts.isEmpty ||
+            !Set(state.deletedCloudIds).isSubset(of: Set(state.confirmedDeletedCloudIds)) ||
             store.history.values.flatMap { $0.taskGroups.flatMap { $0 } }.contains { $0.syncPending && $0.cloudAccount == owner }
         syncMessage = stillPending ? "已合并云端任务；本机仍有待上传修改。" : "已同步 · 新导入 \(count) 个任务"
     }

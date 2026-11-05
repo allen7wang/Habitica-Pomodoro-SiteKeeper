@@ -300,12 +300,14 @@ struct DeletedCloudCreateAttempt: Codable, Equatable {
 struct TopThreeCloudState: Codable {
     var categoryTagIds: [String: String] = [:]
     var deletedCloudIds: [String] = []
+    var confirmedDeletedCloudIds: [String] = []
     var pendingTagRenames: [String: String] = [:] // tag ID -> desired name
     var deletedCreateAttempts: [DeletedCloudCreateAttempt] = []
 
-    init(categoryTagIds: [String: String] = [:], deletedCloudIds: [String] = [], pendingTagRenames: [String: String] = [:], deletedCreateAttempts: [DeletedCloudCreateAttempt] = []) {
+    init(categoryTagIds: [String: String] = [:], deletedCloudIds: [String] = [], confirmedDeletedCloudIds: [String] = [], pendingTagRenames: [String: String] = [:], deletedCreateAttempts: [DeletedCloudCreateAttempt] = []) {
         self.categoryTagIds = categoryTagIds
         self.deletedCloudIds = deletedCloudIds
+        self.confirmedDeletedCloudIds = confirmedDeletedCloudIds
         self.pendingTagRenames = pendingTagRenames
         self.deletedCreateAttempts = deletedCreateAttempts
     }
@@ -313,10 +315,11 @@ struct TopThreeCloudState: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         categoryTagIds = try c.decodeIfPresent([String: String].self, forKey: .categoryTagIds) ?? [:]
         deletedCloudIds = try c.decodeIfPresent([String].self, forKey: .deletedCloudIds) ?? []
+        confirmedDeletedCloudIds = try c.decodeIfPresent([String].self, forKey: .confirmedDeletedCloudIds) ?? []
         pendingTagRenames = try c.decodeIfPresent([String: String].self, forKey: .pendingTagRenames) ?? [:]
         deletedCreateAttempts = try c.decodeIfPresent([DeletedCloudCreateAttempt].self, forKey: .deletedCreateAttempts) ?? []
     }
-    enum CodingKeys: String, CodingKey { case categoryTagIds, deletedCloudIds, pendingTagRenames, deletedCreateAttempts }
+    enum CodingKeys: String, CodingKey { case categoryTagIds, deletedCloudIds, confirmedDeletedCloudIds, pendingTagRenames, deletedCreateAttempts }
 }
 
 struct TopThreeDay: Codable {
@@ -343,12 +346,13 @@ struct TopThreeStore: Codable {
     var categoryTagIds: [String: String] = [:] // 分类名 -> Habitica tag id
     var history: [String: TopThreeDay] = [:] // logical date -> day record
     var deletedCloudIds: [String] = [] // durable tombstones: stale reads cannot resurrect deletions
+    var confirmedDeletedCloudIds: [String] = [] // acknowledged deletes need no repeated HTTP request
     var cloudAccount: String = "" // UID + API root only; never store a token here
     var pendingTagRenames: [String: String] = [:]
     var cloudStates: [String: TopThreeCloudState] = [:]
     var deletedCreateAttempts: [DeletedCloudCreateAttempt] = [] // active owner's unresolved removals
 
-    enum CodingKeys: String, CodingKey { case categoryNames, categoryTagIds, history, deletedCloudIds, cloudAccount, pendingTagRenames, cloudStates, deletedCreateAttempts }
+    enum CodingKeys: String, CodingKey { case categoryNames, categoryTagIds, history, deletedCloudIds, confirmedDeletedCloudIds, cloudAccount, pendingTagRenames, cloudStates, deletedCreateAttempts }
 
     init() {}
 
@@ -358,6 +362,7 @@ struct TopThreeStore: Codable {
         categoryTagIds = try c.decodeIfPresent([String: String].self, forKey: .categoryTagIds) ?? [:]
         history = try c.decodeIfPresent([String: TopThreeDay].self, forKey: .history) ?? [:]
         deletedCloudIds = try c.decodeIfPresent([String].self, forKey: .deletedCloudIds) ?? []
+        confirmedDeletedCloudIds = try c.decodeIfPresent([String].self, forKey: .confirmedDeletedCloudIds) ?? []
         cloudAccount = try c.decodeIfPresent(String.self, forKey: .cloudAccount) ?? ""
         pendingTagRenames = try c.decodeIfPresent([String: String].self, forKey: .pendingTagRenames) ?? [:]
         cloudStates = try c.decodeIfPresent([String: TopThreeCloudState].self, forKey: .cloudStates) ?? [:]
@@ -456,6 +461,73 @@ struct HabiticaTaskItem: Identifiable, Equatable {
     let isDue: Bool // dailies: 今天是否到期
 }
 
+/// One rolling budget per UID/API root, shared by every feature. Admission is synchronous:
+/// delaying a write here would invalidate the caller's identity/revision check before dispatch.
+struct HabiticaRequestBudget {
+    static let localLimit = 24 // Habitica allows 30/minute; leave room for other clients.
+    private var starts: [TimeInterval] = []
+    private var serverRemaining: Int?
+    private var serverReset: TimeInterval = 0
+    private var cooldownUntil: TimeInterval = 0
+    private(set) var received429 = false
+
+    mutating func delay(at uptime: TimeInterval) -> TimeInterval {
+        starts.removeAll { $0 <= uptime - 60 }
+        if uptime >= serverReset { serverRemaining = nil }
+        if uptime >= cooldownUntil { received429 = false }
+        let localDelay = starts.count >= Self.localLimit ? (starts.first! + 60 - uptime) : 0
+        let serverDelay = serverRemaining == 0 ? serverReset - uptime : 0
+        return max(0, localDelay, serverDelay, cooldownUntil - uptime)
+    }
+
+    /// Reject instead of queueing/replaying writes. Unacknowledged local edits stay pending.
+    mutating func reserve(at uptime: TimeInterval) -> TimeInterval {
+        let wait = delay(at: uptime)
+        guard wait <= 0 else { return wait }
+        starts.append(uptime)
+        if let remaining = serverRemaining { serverRemaining = max(0, remaining - 1) }
+        return 0
+    }
+
+    mutating func observe(_ response: HTTPURLResponse, at uptime: TimeInterval, date: Date) {
+        // Use the server's Date when available so a skewed local clock cannot shorten a reset.
+        let reference = response.value(forHTTPHeaderField: "Date").flatMap(Self.httpDate) ?? date
+        let resetDelay = response.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap { value -> TimeInterval? in
+            let reset = Double(value).flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0) : nil }
+                ?? Self.httpDate(value)
+            return reset.map { max(0, $0.timeIntervalSince(reference)) }
+        }
+        if let value = response.value(forHTTPHeaderField: "X-RateLimit-Remaining"), let remaining = Int(value) {
+            if uptime >= serverReset { serverRemaining = nil }
+            // Out-of-order responses may lower the allowance, never replenish it mid-window.
+            serverRemaining = min(serverRemaining ?? max(0, remaining), max(0, remaining))
+            serverReset = max(serverReset, uptime + (resetDelay ?? 60) + 1)
+        }
+        if response.statusCode == 429 {
+            let retryDelay = response.value(forHTTPHeaderField: "Retry-After").flatMap { value -> TimeInterval? in
+                if let seconds = Double(value), seconds.isFinite, seconds >= 0 { return seconds }
+                return Self.httpDate(value).map { max(0, $0.timeIntervalSince(reference)) }
+            }
+            cooldownUntil = max(cooldownUntil, uptime + max(retryDelay ?? resetDelay ?? 60, resetDelay ?? 0) + 1)
+            serverRemaining = 0
+            serverReset = max(serverReset, cooldownUntil)
+            received429 = true
+        }
+    }
+
+    private static func httpDate(_ value: String) -> Date? {
+        let clean = value.components(separatedBy: " (")[0]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in ["EEE, dd MMM yyyy HH:mm:ss zzz", "EEE MMM dd yyyy HH:mm:ss 'GMT'Z"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: clean) { return date }
+        }
+        return ISO8601DateFormatter().date(from: value)
+    }
+}
+
 // MARK: - Habitica API Client
 class HabiticaAPI: ObservableObject {
     static let shared = HabiticaAPI()
@@ -526,7 +598,33 @@ class HabiticaAPI: ObservableObject {
         #endif
         return URLSession(configuration: configuration, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }()
-    private enum RequestFailure: Error { case status(Int), invalidResponse, staleAccount }
+    private enum RequestFailure: Error { case status(Int), rateLimited, invalidResponse, staleAccount }
+    // These dictionaries are only accessed on MainActor. Budget keys never include API tokens.
+    private var requestBudgets: [String: HabiticaRequestBudget] = [:]
+    private struct ReadKey: Hashable {
+        let url: URL?
+        let user: String?
+        let token: String?
+        let generation: UInt64
+    }
+    private var readsInFlight: [ReadKey: Task<(Data, URLResponse), Error>] = [:]
+    private var readGeneration: UInt64 = 0
+
+    @MainActor
+    func rateLimitMessage(settings: UserSettings) -> String? {
+        guard let account = cloudAccount(settings: settings) else { return nil }
+        return rateLimitMessage(account: account)
+    }
+
+    @MainActor
+    private func rateLimitMessage(account: String) -> String? {
+        guard var budget = requestBudgets[account] else { return nil }
+        let delay = budget.delay(at: ProcessInfo.processInfo.systemUptime)
+        requestBudgets[account] = budget
+        guard delay > 0 else { return nil }
+        let reason = budget.received429 ? "Habitica 暂时限流（HTTP 429）" : "Habitica 请求额度暂时用完"
+        return "\(reason)，请 \(Int(ceil(delay))) 秒后重试。"
+    }
     private func reportError(_ message: String, settings: UserSettings? = nil) {
         DispatchQueue.main.async {
             if let settings = settings, !self.matchesCurrentAccount(settings) { return }
@@ -538,9 +636,39 @@ class HabiticaAPI: ObservableObject {
     // no executor hop — and no interleaved state mutation — between validation and task.resume().
     @MainActor
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        guard matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
+        try Task.checkCancellation()
+        // Only reads can share an in-flight request. Scores/creates/deletes are never replayed.
+        if (request.httpMethod ?? "GET") == "GET" {
+            let key = ReadKey(url: request.url, user: request.value(forHTTPHeaderField: "x-api-user"),
+                              token: request.value(forHTTPHeaderField: "x-api-key"), generation: readGeneration)
+            if let pending = readsInFlight[key] { return try await pending.value }
+            let pending = Task { @MainActor in try await self.performRequest(request) }
+            readsInFlight[key] = pending
+            defer { readsInFlight.removeValue(forKey: key) }
+            return try await pending.value
+        }
+        return try await performRequest(request)
+    }
+
+    @MainActor
+    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         // Check immediately before dispatch, not only when applying the response. Queued phase work
         // must not keep scoring an account that is no longer active.
         guard matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
+        try Task.checkCancellation()
+        let account = cloudAccount(settings: SettingsManager.shared.settings)!
+        var budget = requestBudgets[account] ?? HabiticaRequestBudget()
+        let delay = budget.reserve(at: ProcessInfo.processInfo.systemUptime)
+        requestBudgets[account] = budget
+        guard delay <= 0 else {
+            lastError = rateLimitMessage(account: account)
+            throw RequestFailure.rateLimited
+        }
+        let isMutation = (request.httpMethod ?? "GET") != "GET"
+        if isMutation { readGeneration &+= 1 }
+        // Verification after a write must not join a read started before its acknowledgement.
+        defer { if isMutation { readGeneration &+= 1 } }
         do {
             // Atomic dispatch: create and start the data task synchronously before any suspension.
             // This prevents a race where MainActor state changes between the guard and the network dispatch.
@@ -557,18 +685,29 @@ class HabiticaAPI: ObservableObject {
                 task.resume()
             }
             guard let http = response as? HTTPURLResponse else { throw RequestFailure.invalidResponse }
-            guard (200..<300).contains(http.statusCode) else {
+            var updated = requestBudgets[account] ?? budget
+            updated.observe(http, at: ProcessInfo.processInfo.systemUptime, date: Date())
+            requestBudgets[account] = updated
+            // Deleting an already absent task is an acknowledged, idempotent success.
+            guard (200..<300).contains(http.statusCode) || (request.httpMethod == "DELETE" && http.statusCode == 404) else {
                 await MainActor.run {
                     guard self.matchesCurrentRequest(request) else { return }
-                    self.lastError = http.statusCode == 401 ? "Habitica 认证失败，请检查 User ID / API Token" : "Habitica 请求失败（HTTP \(http.statusCode)）"
+                    self.lastError = http.statusCode == 429 ? self.rateLimitMessage(account: account)
+                        : (http.statusCode == 401 ? "Habitica 认证失败，请检查 User ID / API Token" : "Habitica 请求失败（HTTP \(http.statusCode)）")
                     if http.statusCode == 401 { self.isAuthenticated = false }
                 }
                 throw RequestFailure.status(http.statusCode)
             }
-            await MainActor.run { if self.matchesCurrentRequest(request) { self.lastError = nil } }
+            await MainActor.run {
+                if self.matchesCurrentRequest(request), !updated.received429 { self.lastError = nil }
+            }
             return (data, response)
         } catch {
-            if !(error is RequestFailure) { await MainActor.run { if self.matchesCurrentRequest(request) { self.lastError = "网络错误：\(error.localizedDescription)" } } }
+            if case RequestFailure.invalidResponse = error {
+                if matchesCurrentRequest(request) { lastError = "Habitica 返回了无法识别的响应。" }
+            } else if !(error is RequestFailure) && !(error is CancellationError) {
+                if matchesCurrentRequest(request) { lastError = "网络错误：\(error.localizedDescription)" }
+            }
             throw error
         }
     }
@@ -612,12 +751,13 @@ class HabiticaAPI: ObservableObject {
                     self.exp = (stats["exp"] as? Double) ?? 0
                     self.hp = (stats["hp"] as? Double) ?? 0
                     self.isAuthenticated = true
-                    self.lastError = nil
+                    // A slower successful profile response must not erase a newer shared 429.
+                    if self.requestBudgets[self.cloudAccount(settings: settings) ?? ""]?.received429 != true {
+                        self.lastError = nil
+                    }
                 }
             }
-        } catch {
-            await MainActor.run { if self.matchesCurrentAccount(settings) { self.lastError = "Network error: \(error.localizedDescription)"; self.isAuthenticated = false } }
-        }
+        } catch { /* perform preserves HTTP/cooldown errors; only a real 401 invalidates credentials. */ }
     }
 
     // Score a habit up/down
@@ -898,7 +1038,7 @@ class HabiticaAPI: ObservableObject {
         do {
             let (_, response) = try await perform(req)
             guard let http = response as? HTTPURLResponse else { return false }
-            return http.statusCode == 200
+            return http.statusCode == 200 || http.statusCode == 404
         } catch { return false }
     }
 

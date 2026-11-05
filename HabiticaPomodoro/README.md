@@ -2,6 +2,11 @@
 
 一款原生番茄钟应用（macOS 菜单栏 + iOS / Android 客户端，目标是统一业务规则），深度集成 [Habitica](https://habitica.com)，并独创 **智能时间块（Block Mode）** 与 **每日三件事（Top 3）** 功能，帮你把一天组织成可执行、可回顾的节奏。
 
+macOS / iOS 客户端在本机统一管理各功能的 Habitica 请求额度：同一 User ID / API 地址在滚动 60 秒内最多发送 24 次，
+并遵守服务器返回的剩余额度、重置时间和 `Retry-After`。额度不足或收到 HTTP 429 时会提示等待秒数，
+待同步的本机任务及删除进度会保留，冷却结束后可手动刷新继续；打分、创建任务不会自动重放。
+已获服务器确认的删除不再反复发送，删除记录仍会保留以防旧响应重新导入任务。
+
 基于 [ofekmiz/Habitica-Pomodoro-SiteKeeper](https://github.com/ofekmiz/Habitica-Pomodoro-SiteKeeper) Chrome 扩展的 macOS 原生重制与增强版。
 
 **Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。

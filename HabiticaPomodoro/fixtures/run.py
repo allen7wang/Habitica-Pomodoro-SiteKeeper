@@ -36,6 +36,8 @@ SOURCE_NAMES = (
 CASE_HELPERS = {
     "qishi_audio": ("audio_stubs.swift",),
     "foreground_recovery": ("audio_stubs.swift", "notification_stubs.swift", "activation_stubs.swift"),
+    "habitica_rate_limit": ("habitica_transport.swift",),
+    "habitica_sync_budget": ("habitica_transport.swift",),
 }
 EXCLUDED_CASES = {Path(helper).stem for helpers in CASE_HELPERS.values() for helper in helpers}
 SLOW_READ_CASES = {"cold_launch", "file_monitor", "foreground_recovery"}

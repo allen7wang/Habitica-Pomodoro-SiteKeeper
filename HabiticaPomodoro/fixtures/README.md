@@ -15,6 +15,7 @@ python3 HabiticaPomodoro/fixtures/run.py
 python3 HabiticaPomodoro/fixtures/run.py --only file_monitor
 python3 HabiticaPomodoro/fixtures/run.py --only qishi_audio
 python3 HabiticaPomodoro/fixtures/run.py --only foreground_recovery --only dirty_reload
+python3 HabiticaPomodoro/fixtures/run.py --only habitica_rate_limit --only habitica_sync_budget
 ```
 
 The work-directory base is `--work`, then `HERMES_SCRATCH`, then `TMPDIR`.
@@ -123,6 +124,22 @@ per-case commands.
   CSV schema. The case initializes no managers and makes no storage writes.
 
 ## Isolation and limits
+
+`habitica_rate_limit` and `habitica_sync_budget` compile the real API, request budget,
+and Top3 synchronization code with `habitica_transport.swift`. Its `URLProtocol`
+intercepts **every** request; settings, tokens, owners, responses and persisted data
+are synthetic and remain under the runner's isolated directories. No real account
+is contacted or scored. Budget time is supplied directly to the production value
+type, so expiry tests do not sleep for a minute or change the app's clock.
+
+Coverage includes the rolling ceiling, server allowances, out-of-order headers,
+fractional and HTTP-date `Retry-After`, JavaScript/epoch reset dates, local clock
+skew, fallback cooldowns, shared cooldown across features and token rotation,
+read coalescing, fresh verification across write boundaries, cancellation and
+stale-owner dispatch, preserved authentication on 429, and real 401 handling.
+Top3 cases cover persisted 200/404 deletion acknowledgements, failed-deletion
+retries, retained tombstones, owner switching, old JSON migration, partial batch
+progress, stopping on 429, and verification request counts with/without scoring.
 
 Before any manager initializes, the generated preflight verifies Foundation's
 home and Documents paths under the case's fresh `CFFIXED_USER_HOME` and sets
