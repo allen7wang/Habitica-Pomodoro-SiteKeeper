@@ -1408,6 +1408,35 @@ class TopThreeManager: ObservableObject {
         lhs.title == rhs.title && lhs.notes == rhs.notes && Set(lhs.tags) == Set(rhs.tags)
     }
 
+    /// A request known not to have created a remote task needs no ambiguous-POST marker.
+    /// Reconcile the original owner's state even if its row was removed or the account changed.
+    private func clearRejectedCreateAttempt(id: UUID, attempt: CloudCreateAttempt, owner: String) {
+        var changed = false
+        for (key, var day) in store.history {
+            var dayChanged = false
+            for group in day.taskGroups.indices {
+                for index in day.taskGroups[group].indices {
+                    let task = day.taskGroups[group][index]
+                    guard task.id == id, task.cloudAccount == owner, task.habiticaTaskId == nil,
+                          task.cloudCreateAttempt.map({ sameAttempt($0, attempt) }) == true else { continue }
+                    day.taskGroups[group][index].cloudCreateAttempt = nil
+                    dayChanged = true
+                    changed = true
+                }
+            }
+            if dayChanged { store.history[key] = day }
+        }
+        var state = cloudState(owner: owner)
+        let before = state.deletedCreateAttempts.count
+        state.deletedCreateAttempts.removeAll { $0.id == id && sameAttempt($0.attempt, attempt) }
+        if state.deletedCreateAttempts.count != before {
+            if owner == store.cloudAccount { store.deletedCreateAttempts = state.deletedCreateAttempts }
+            else { store.cloudStates[owner] = state }
+            changed = true
+        }
+        if changed { save() }
+    }
+
     private func matches(_ todo: HabiticaAPI.CloudTodo, attempt: CloudCreateAttempt) -> Bool {
         todo.title == attempt.title && todo.notes == attempt.notes && Set(todo.tags) == Set(attempt.tags)
     }
@@ -1509,7 +1538,14 @@ class TopThreeManager: ObservableObject {
                     guard attemptCandidateIds(attempt, owner: owner).subtracting([id]).isEmpty else { return }
                     updateCopies(id: id, owner: owner) { $0.cloudCreateAttempt = attempt }
                     guard save() else { return } // Durable exact version BEFORE dispatch.
-                    remoteId = await HabiticaAPI.shared.createTodo(text: task.title, notes: notes, tagIds: [tag], settings: settings)
+                    let result = await HabiticaAPI.shared.createTodo(text: task.title, notes: notes, tagIds: [tag], settings: settings)
+                    switch result {
+                    case .created(let id): remoteId = id
+                    case .notCreated:
+                        clearRejectedCreateAttempt(id: id, attempt: attempt, owner: owner)
+                        return
+                    case .uncertain: return
+                    }
                     guard isActiveOwner(owner) else { return }
                 }
                 guard let created = remoteId,

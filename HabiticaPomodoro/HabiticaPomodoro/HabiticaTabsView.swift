@@ -200,9 +200,9 @@ struct HabiticaHabitsView: View {
         }
         scoredIds.removeAll()
         loading = true
-        let items = await HabiticaAPI.shared.fetchTasks(type: "habits", settings: settings)
+        let items = await HabiticaAPI.shared.fetchTaskList(type: "habits", settings: settings)
         guard accountSignature == signature, loadGeneration == generation else { return }
-        if api.lastError == nil { habits = items.sorted { $0.value < $1.value } } // 红色（弱项）在前
+        if let items = items { habits = items.sorted { $0.value < $1.value } } // 红色（弱项）在前
         loading = false
     }
 
@@ -432,9 +432,9 @@ struct HabiticaDailiesView: View {
             return
         }
         loading = true
-        let items = await HabiticaAPI.shared.fetchTasks(type: "dailys", settings: settings)
+        let items = await HabiticaAPI.shared.fetchTaskList(type: "dailys", settings: settings)
         guard accountSignature == signature, loadGeneration == generation else { return }
-        if api.lastError == nil { dailies = items }
+        if let items = items { dailies = items }
         loading = false
     }
 

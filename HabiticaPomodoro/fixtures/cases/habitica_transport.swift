@@ -7,6 +7,8 @@ final class HabiticaFixtureProtocol: URLProtocol {
         var headers: [String: String] = [:]
         var body: [String: Any] = ["success": true, "data": []]
         var delay: TimeInterval = 0
+        var rawData: Data? = nil
+        var error: URLError? = nil
     }
     private static let lock = NSLock()
     private static var handler: (URLRequest) -> Reply = { _ in Reply() }
@@ -33,10 +35,14 @@ final class HabiticaFixtureProtocol: URLProtocol {
         let deliver = {
             self.deliveryLock.lock(); defer { self.deliveryLock.unlock() }
             guard !self.stopped else { return }
+            if let error = reply.error {
+                self.client?.urlProtocol(self, didFailWithError: error)
+                return
+            }
             let response = HTTPURLResponse(url: self.request.url!, statusCode: reply.status,
                                            httpVersion: "HTTP/1.1", headerFields: reply.headers)!
             self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            self.client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: reply.body))
+            self.client?.urlProtocol(self, didLoad: reply.rawData ?? (try! JSONSerialization.data(withJSONObject: reply.body)))
             self.client?.urlProtocolDidFinishLoading(self)
         }
         if reply.delay > 0 { DispatchQueue.global().asyncAfter(deadline: .now() + reply.delay, execute: deliver) }

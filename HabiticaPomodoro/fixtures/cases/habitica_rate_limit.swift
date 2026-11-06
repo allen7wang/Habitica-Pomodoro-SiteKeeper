@@ -69,15 +69,21 @@ runHabiticaFixture {
         HabiticaFixtureProtocol.respond { _ in .init(status: 429, headers: headers) }
         await api.fetchUserData(settings: excessive)
         _ = await api.fetchTasks(type: "habits", settings: excessive)
+        // The uptime addition/subtraction can round the Int.max boundary down into
+        // Int's representable range. Both a finite countdown and the fallback are safe.
+        let safeMessage = api.lastError?.contains("等待时间过长") == true ||
+            (index == 1 && api.lastError?.contains("秒后重试") == true)
         checkHabitica(HabiticaFixtureProtocol.calls.count == 1 &&
                       api.lastError?.contains("HTTP 429") == true &&
-                      api.lastError?.contains("等待时间过长") == true,
+                      safeMessage,
                       "oversized cooldown header \(index) remains enforced and displays without integer overflow")
     }
 
     let concurrent = fixtureAccount("late-success")
+    api.monies = 0
+    api.isAuthenticated = false
     HabiticaFixtureProtocol.respond { request in
-        if request.url!.path.hasSuffix("/user/") {
+        if request.url!.path == "/api/v3/user" || request.url!.path == "/api/v3/user/" {
             return .init(body: ["data": ["stats": ["gp": 2]]], delay: 0.1)
         }
         return .init(status: 429, headers: ["Retry-After": "60"])
@@ -86,7 +92,7 @@ runHabiticaFixture {
     while HabiticaFixtureProtocol.calls.isEmpty { await Task.yield() }
     _ = await api.fetchTasks(type: "habits", settings: concurrent)
     await slowProfile.value
-    checkHabitica(api.isAuthenticated && api.lastError?.contains("HTTP 429") == true,
+    checkHabitica(api.isAuthenticated && api.monies == 2 && api.lastError?.contains("HTTP 429") == true,
                   "a late successful profile cannot erase a newer shared cooldown error")
 
     let allowance = fixtureAccount("remaining")

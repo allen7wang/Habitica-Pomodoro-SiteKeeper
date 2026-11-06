@@ -16,6 +16,7 @@ python3 HabiticaPomodoro/fixtures/run.py --only file_monitor
 python3 HabiticaPomodoro/fixtures/run.py --only qishi_audio
 python3 HabiticaPomodoro/fixtures/run.py --only foreground_recovery --only dirty_reload
 python3 HabiticaPomodoro/fixtures/run.py --only habitica_rate_limit --only habitica_sync_budget
+python3 HabiticaPomodoro/fixtures/run.py --only habitica_create_recovery --only habitica_task_lists
 ```
 
 The work-directory base is `--work`, then `HERMES_SCRATCH`, then `TMPDIR`.
@@ -125,8 +126,9 @@ per-case commands.
 
 ## Isolation and limits
 
-`habitica_rate_limit` and `habitica_sync_budget` compile the real API, request budget,
-and Top3 synchronization code with `habitica_transport.swift`. Its `URLProtocol`
+`habitica_rate_limit`, `habitica_sync_budget`, `habitica_create_recovery`, and
+`habitica_task_lists` compile the real API, request budget, and Top3 synchronization
+code with `habitica_transport.swift`. Its `URLProtocol`
 intercepts **every** request; settings, tokens, owners, responses and persisted data
 are synthetic and remain under the runner's isolated directories. No real account
 is contacted or scored. Budget time is supplied directly to the production value
@@ -141,6 +143,15 @@ stale-owner dispatch, preserved authentication on 429, and real 401 handling.
 Top3 cases cover persisted 200/404 deletion acknowledgements, failed-deletion
 retries, retained tombstones, owner switching, old JSON migration, partial batch
 progress, stopping on 429, and verification request counts with/without scoring.
+Creation recovery covers pre-dispatch budget/cancellation failures, actual 401/429
+rejections and a later successful manual retry, deletion/account switches while
+POST is in flight, and exact owner/UUID/payload cleanup. Dispatched URL timeouts,
+connection loss/cancellation, unclassified HTTP errors and malformed success
+responses retain their ambiguity marker and must not blindly repeat POST.
+Task-list cases distinguish a valid empty list from malformed JSON, invalid rows,
+duplicate IDs, HTTP and network failures. A successful list remains available
+even when another request has a shared error. The fixtures exercise API results;
+Mac/iOS view adoption is additionally checked by source review and compilation.
 
 Before any manager initializes, the generated preflight verifies Foundation's
 home and Documents paths under the case's fresh `CFFIXED_USER_HOME` and sets

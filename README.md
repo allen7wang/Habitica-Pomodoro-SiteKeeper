@@ -15,6 +15,7 @@
 
 ## 版本与同步边界
 
+- **[macOS v2.1.3](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v2.1.3)**：修复新建任务被本地额度、HTTP 401/429 拒绝后无法再次上传的问题；习惯与每日任务遇到异常响应时保留已加载列表。主程序与今日任务小组件均为 build 17，详见[更新说明](HabiticaPomodoro/releases/v2.1.3.md)。
 - **[macOS v2.1.2](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v2.1.2)**：Habitica 各功能共享请求额度，遇到限流时提示等待；已确认的删除不再重复请求，离线待同步任务与删除进度保留。主程序与今日任务小组件均为 build 16，详见[更新说明](HabiticaPomodoro/releases/v2.1.2.md)。
 - **macOS v2.1.1**：任务页将今天、昨天放在上方，未完成任务放在下方；效率工作台保留今天/昨天并排布局。
 - **macOS v2.1.0**：任务页新增「未完成任务」，收集昨天及更早仍未完成的任务，可删除或转到今天的原分类。

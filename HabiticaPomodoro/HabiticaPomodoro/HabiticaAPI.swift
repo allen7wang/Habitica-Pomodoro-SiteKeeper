@@ -967,13 +967,21 @@ class HabiticaAPI: ObservableObject {
 
     // MARK: - Todos (Top3 任务同步为 Habitica todo)
 
-    // 创建 todo，返回 task id
+    enum TodoCreationResult {
+        case created(String)
+        /// The request never dispatched or was explicitly rejected before creation.
+        case notCreated
+        /// The server may have created the task; reconcile before any new POST.
+        case uncertain
+    }
+
+    // 创建 todo，保留“确定未创建”与“结果不明”的区别。
     // MainActor: POST dispatch is part of the atomic validation→dispatch segment.
     @MainActor
-    func createTodo(text: String, notes: String, tagIds: [String], settings: UserSettings) async -> String? {
+    func createTodo(text: String, notes: String, tagIds: [String], settings: UserSettings) async -> TodoCreationResult {
         guard settings.connectHabitica,
-              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
-        guard let url = endpoint(path: HabiticaConsts.pathUserTasks, settings: settings) else { return nil }
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return .notCreated }
+        guard let url = endpoint(path: HabiticaConsts.pathUserTasks, settings: settings) else { return .notCreated }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
@@ -984,13 +992,25 @@ class HabiticaAPI: ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (data, response) = try await perform(req)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return nil }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return .uncertain }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let d = json["data"] as? [String: Any] {
-                return d["id"] as? String
+               let d = json["data"] as? [String: Any],
+               let id = d["id"] as? String, !id.isEmpty {
+                return .created(id)
             }
-        } catch { return nil }
-        return nil
+        } catch RequestFailure.rateLimited {
+            return .notCreated
+        } catch RequestFailure.staleAccount {
+            return .notCreated
+        } catch is CancellationError {
+            // performRequest checks cancellation before task.resume(); it never cancels a sent POST.
+            return .notCreated
+        } catch RequestFailure.status(let code) where code == 401 || code == 429 {
+            return .notCreated
+        } catch {
+            return .uncertain
+        }
+        return .uncertain
     }
 
     // 更新 todo（标题 / tags）
@@ -1081,9 +1101,14 @@ class HabiticaAPI: ObservableObject {
 
     // 获取指定类型的任务列表
     func fetchTasks(type: String, settings: UserSettings) async -> [HabiticaTaskItem] {
+        await fetchTaskList(type: type, settings: settings) ?? []
+    }
+
+    /// A failed request is distinct from a valid empty list, so views can retain their last data.
+    func fetchTaskList(type: String, settings: UserSettings) async -> [HabiticaTaskItem]? {
         guard settings.connectHabitica,
-              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return [] }
-        guard let url = endpoint(path: "tasks/user?type=\(type)", settings: settings) else { return [] }
+              !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        guard let url = endpoint(path: "tasks/user?type=\(type)", settings: settings) else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
@@ -1091,12 +1116,25 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
             let (data, response) = try await perform(req)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let arr = json["data"] as? [[String: Any]] else { return [] }
-            return arr.compactMap { t in
-                guard let id = t["id"] as? String,
-                      let text = t["text"] as? String else { return nil }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            let decoded: Any
+            do { decoded = try JSONSerialization.jsonObject(with: data) }
+            catch {
+                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                return nil
+            }
+            guard let json = decoded as? [String: Any], let arr = json["data"] as? [[String: Any]] else {
+                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                return nil
+            }
+            var items: [HabiticaTaskItem] = []
+            var ids = Set<String>()
+            for t in arr {
+                guard let id = t["id"] as? String, !id.isEmpty, ids.insert(id).inserted,
+                      let text = t["text"] as? String else {
+                    reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                    return nil
+                }
                 let notes = t["notes"] as? String ?? ""
                 let value = t["value"] as? Double ?? 0
                 var completed = false
@@ -1108,10 +1146,13 @@ class HabiticaAPI: ObservableObject {
                 var canUp = true, canDown = true
                 if let up = t["up"] as? Bool { canUp = up }
                 if let down = t["down"] as? Bool { canDown = down }
-                return HabiticaTaskItem(id: id, text: text, notes: notes, value: value,
-                                        completed: completed, canUp: canUp, canDown: canDown, isDue: isDue)
+                items.append(HabiticaTaskItem(id: id, text: text, notes: notes, value: value,
+                                             completed: completed, canUp: canUp, canDown: canDown, isDue: isDue))
             }
-        } catch { return [] }
+            return items
+        } catch {
+            return nil
+        }
     }
 
     // 打分（up/down），返回最新 stats
