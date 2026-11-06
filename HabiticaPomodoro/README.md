@@ -11,7 +11,7 @@ macOS / iOS 客户端在本机统一管理各功能的 Habitica 请求额度：�
 
 **Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。
 
-> **版本状态**：macOS **v2.1.0** 本地构建新增「未完成任务」。若 macOS 重新询问访问权限，请为 Habitica Pomodoro 允许「文稿」访问。此前已发布 **[v1.2.7](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v1.2.7)**。iOS / Android 的发行版本为 v1.2.5。
+> **版本状态**：macOS **[v2.1.2（build 16）](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v2.1.2)** 更新 Habitica 请求限流、待同步进度与删除确认处理，并保留 2.0 的专注复盘、2.1 的跨天未完成任务及任务页顺序调整。若 macOS 重新询问访问权限，请为 Habitica Pomodoro 允许「文稿」访问。iOS / Android 的发行版本为 v1.2.5。
 
 ## 功能特性
 

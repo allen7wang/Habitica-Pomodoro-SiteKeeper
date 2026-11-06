@@ -59,6 +59,22 @@ runHabiticaFixture {
     _ = await api.fetchTasks(type: "dailys", settings: rotated)
     checkHabitica(HabiticaFixtureProtocol.calls.count == 1, "token rotation does not bypass the same account budget")
 
+    for (index, headers) in [
+        ["Retry-After": "1e30"],
+        ["Retry-After": String(Double(Int.max))],
+        ["Retry-After": String(Double.greatestFiniteMagnitude)],
+        ["X-RateLimit-Reset": "1e30"]
+    ].enumerated() {
+        let excessive = fixtureAccount("excessive-delay-\(index)")
+        HabiticaFixtureProtocol.respond { _ in .init(status: 429, headers: headers) }
+        await api.fetchUserData(settings: excessive)
+        _ = await api.fetchTasks(type: "habits", settings: excessive)
+        checkHabitica(HabiticaFixtureProtocol.calls.count == 1 &&
+                      api.lastError?.contains("HTTP 429") == true &&
+                      api.lastError?.contains("等待时间过长") == true,
+                      "oversized cooldown header \(index) remains enforced and displays without integer overflow")
+    }
+
     let concurrent = fixtureAccount("late-success")
     HabiticaFixtureProtocol.respond { request in
         if request.url!.path.hasSuffix("/user/") {

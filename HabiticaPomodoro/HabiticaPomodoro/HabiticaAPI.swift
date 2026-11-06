@@ -623,7 +623,11 @@ class HabiticaAPI: ObservableObject {
         requestBudgets[account] = budget
         guard delay > 0 else { return nil }
         let reason = budget.received429 ? "Habitica 暂时限流（HTTP 429）" : "Habitica 请求额度暂时用完"
-        return "\(reason)，请 \(Int(ceil(delay))) 秒后重试。"
+        // A finite server delay can still exceed Int's range. Keep its cooldown intact
+        // while avoiding a trapping conversion when formatting an unusual response header.
+        let retry = Int(exactly: ceil(delay)).map { "\($0) 秒后重试。" }
+            ?? "稍后重试（服务器要求的等待时间过长）。"
+        return "\(reason)，请 \(retry)"
     }
     private func reportError(_ message: String, settings: UserSettings? = nil) {
         DispatchQueue.main.async {

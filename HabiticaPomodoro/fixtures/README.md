@@ -134,7 +134,8 @@ type, so expiry tests do not sleep for a minute or change the app's clock.
 
 Coverage includes the rolling ceiling, server allowances, out-of-order headers,
 fractional and HTTP-date `Retry-After`, JavaScript/epoch reset dates, local clock
-skew, fallback cooldowns, shared cooldown across features and token rotation,
+skew, fallback cooldowns, oversized cooldown headers without integer-conversion
+crashes, shared cooldown across features and token rotation,
 read coalescing, fresh verification across write boundaries, cancellation and
 stale-owner dispatch, preserved authentication on 429, and real 401 handling.
 Top3 cases cover persisted 200/404 deletion acknowledgements, failed-deletion
