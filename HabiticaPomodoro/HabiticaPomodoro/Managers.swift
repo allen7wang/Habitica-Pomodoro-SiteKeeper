@@ -426,16 +426,40 @@ final class PomodoroFileChanges {
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
 
+    /// In-memory identity epoch: A→B→A must differ from the original A session.
+    private(set) var habiticaAccountGeneration: UInt64 = 0
+
     @Published var settings: UserSettings {
         didSet {
             guard !isNormalizing else { return }
             isNormalizing = true
             var normalized = settings
             normalized.normalize()
+            if Self.habiticaIdentity(oldValue) != Self.habiticaIdentity(normalized) {
+                habiticaAccountGeneration &+= 1
+            }
             settings = normalized
             isNormalizing = false
             if !isReloading { save() }
         }
+    }
+
+    /// Match the API's effective root without initializing HabiticaAPI.shared during startup.
+    private static func habiticaIdentity(_ settings: UserSettings) -> [String] {
+        let rootOverride = settings.developerServerUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configured = rootOverride.isEmpty ? HabiticaConsts.serverUrl : rootOverride
+        var root = ""
+        if var parts = URLComponents(string: configured), parts.scheme?.lowercased() == "https",
+           let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
+           parts.query == nil, parts.fragment == nil {
+            parts.scheme = "https"
+            parts.host = host.lowercased()
+            if parts.port == 443 { parts.port = nil }
+            while parts.path.hasSuffix("/") { parts.path.removeLast() }
+            parts.path += "/"
+            root = parts.string ?? ""
+        }
+        return [settings.connectHabitica ? "1" : "0", settings.uid, settings.apiToken, root]
     }
 
     private var isNormalizing = false

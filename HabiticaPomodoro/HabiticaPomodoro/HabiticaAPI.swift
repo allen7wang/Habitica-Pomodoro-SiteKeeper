@@ -575,7 +575,9 @@ class HabiticaAPI: ObservableObject {
 
     private func matchesCurrentAccount(_ settings: UserSettings) -> Bool {
         let current = SettingsManager.shared.settings
-        return current.connectHabitica == settings.connectHabitica && current.uid == settings.uid && current.apiToken == settings.apiToken && current.developerServerUrl == settings.developerServerUrl
+        return current.connectHabitica == settings.connectHabitica && current.uid == settings.uid &&
+            current.apiToken == settings.apiToken &&
+            configure(serverUrlOverride: current.developerServerUrl) == configure(serverUrlOverride: settings.developerServerUrl)
     }
     private func matchesCurrentRequest(_ request: URLRequest) -> Bool {
         let current = SettingsManager.shared.settings
@@ -601,13 +603,27 @@ class HabiticaAPI: ObservableObject {
     private enum RequestFailure: Error { case status(Int), rateLimited, invalidResponse, staleAccount }
     // These dictionaries are only accessed on MainActor. Budget keys never include API tokens.
     private var requestBudgets: [String: HabiticaRequestBudget] = [:]
+    private struct RequestContext {
+        let request: URLRequest
+        let accountGeneration: UInt64
+        let sequence: UInt64
+        let errorRevision: UInt64
+    }
+    private typealias RequestResult = (data: Data, response: URLResponse, context: RequestContext)
+    private var feedbackAccountGeneration: UInt64?
+    private var requestSequence: UInt64 = 0
+    private var errorRevision: UInt64 = 0
+    private var latestErrorSequence: UInt64 = 0
+    private var latestAuthenticationSequence: UInt64 = 0
+    private var latestProfileSequence: UInt64 = 0
     private struct ReadKey: Hashable {
         let url: URL?
         let user: String?
         let token: String?
         let generation: UInt64
+        let accountGeneration: UInt64
     }
-    private var readsInFlight: [ReadKey: Task<(Data, URLResponse), Error>] = [:]
+    private var readsInFlight: [ReadKey: Task<RequestResult, Error>] = [:]
     private var readGeneration: UInt64 = 0
 
     @MainActor
@@ -629,44 +645,119 @@ class HabiticaAPI: ObservableObject {
             ?? "稍后重试（服务器要求的等待时间过长）。"
         return "\(reason)，请 \(retry)"
     }
-    private func reportError(_ message: String, settings: UserSettings? = nil) {
+    @MainActor
+    private func prepareFeedbackGeneration() {
+        let generation = SettingsManager.shared.habiticaAccountGeneration
+        guard feedbackAccountGeneration != generation else { return }
+        feedbackAccountGeneration = generation
+        errorRevision &+= 1
+        latestErrorSequence = 0
+        latestAuthenticationSequence = 0
+        latestProfileSequence = 0
+        lastError = nil
+    }
+
+    @MainActor
+    private func isCurrent(_ context: RequestContext) -> Bool {
+        context.accountGeneration == SettingsManager.shared.habiticaAccountGeneration &&
+            matchesCurrentRequest(context.request)
+    }
+
+    @MainActor
+    private func connectionGeneration(settings: UserSettings) -> UInt64? {
+        matchesCurrentAccount(settings) ? SettingsManager.shared.habiticaAccountGeneration : nil
+    }
+
+    @MainActor
+    private func publishError(_ message: String?, context: RequestContext) {
+        guard isCurrent(context), context.sequence >= latestErrorSequence else { return }
+        latestErrorSequence = context.sequence
+        errorRevision &+= 1
+        lastError = message
+        // @Published emits in willSet; a subscriber can retire this connection before assignment ends.
+        if !isCurrent(context), lastError == message { lastError = nil }
+    }
+
+    @MainActor
+    private func publishSuccess(context: RequestContext, account: String) {
+        // Only a request started after the currently displayed error may clear it.
+        guard isCurrent(context), errorRevision == context.errorRevision,
+              requestBudgets[account]?.received429 != true else { return }
+        lastError = nil
+    }
+
+    private func reportError(_ message: String, settings: UserSettings? = nil,
+                             context: RequestContext? = nil) {
+        let generation = context?.accountGeneration ?? SettingsManager.shared.habiticaAccountGeneration
         DispatchQueue.main.async {
-            if let settings = settings, !self.matchesCurrentAccount(settings) { return }
-            self.lastError = message
+            guard generation == SettingsManager.shared.habiticaAccountGeneration else { return }
+            if let context = context {
+                self.publishError(message, context: context)
+            } else {
+                if let settings = settings, !self.matchesCurrentAccount(settings) { return }
+                self.prepareFeedbackGeneration()
+                self.requestSequence &+= 1
+                self.latestErrorSequence = self.requestSequence
+                self.errorRevision &+= 1
+                self.lastError = message
+            }
         }
     }
-    // MainActor isolation: callers (pushTask/synchronize) validate identity and revision on the
-    // MainActor immediately before dispatch. Keeping the whole call chain on the MainActor means
-    // no executor hop — and no interleaved state mutation — between validation and task.resume().
+    // MainActor isolation: caller validation and mutation dispatch share a non-suspending segment.
     @MainActor
-    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        guard matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
+    private func perform(_ request: URLRequest, accountGeneration expectedGeneration: UInt64? = nil) async throws -> RequestResult {
+        let generation = expectedGeneration ?? SettingsManager.shared.habiticaAccountGeneration
+        guard generation == SettingsManager.shared.habiticaAccountGeneration,
+              matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
         try Task.checkCancellation()
         // Only reads can share an in-flight request. Scores/creates/deletes are never replayed.
         if (request.httpMethod ?? "GET") == "GET" {
             let key = ReadKey(url: request.url, user: request.value(forHTTPHeaderField: "x-api-user"),
-                              token: request.value(forHTTPHeaderField: "x-api-key"), generation: readGeneration)
-            if let pending = readsInFlight[key] { return try await pending.value }
-            let pending = Task { @MainActor in try await self.performRequest(request) }
-            readsInFlight[key] = pending
-            defer { readsInFlight.removeValue(forKey: key) }
-            return try await pending.value
+                              token: request.value(forHTTPHeaderField: "x-api-key"), generation: readGeneration,
+                              accountGeneration: generation)
+            let pending: Task<RequestResult, Error>
+            let ownsRead: Bool
+            if let existing = readsInFlight[key] {
+                pending = existing
+                ownsRead = false
+            } else {
+                pending = Task { @MainActor in try await self.performRequest(request, accountGeneration: generation) }
+                readsInFlight[key] = pending
+                ownsRead = true
+            }
+            defer { if ownsRead { readsInFlight.removeValue(forKey: key) } }
+            do {
+                let result = try await pending.value
+                guard isCurrent(result.context) else { throw RequestFailure.staleAccount }
+                return result
+            } catch {
+                guard generation == SettingsManager.shared.habiticaAccountGeneration,
+                      matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
+                throw error
+            }
         }
-        return try await performRequest(request)
+        // Sent mutations must return their real outcome, even after a connection change.
+        return try await performRequest(request, accountGeneration: generation)
     }
 
     @MainActor
-    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        // Check immediately before dispatch, not only when applying the response. Queued phase work
-        // must not keep scoring an account that is no longer active.
-        guard matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
+    private func performRequest(_ request: URLRequest, accountGeneration generation: UInt64) async throws -> RequestResult {
+        guard generation == SettingsManager.shared.habiticaAccountGeneration,
+              matchesCurrentRequest(request) else { throw RequestFailure.staleAccount }
         try Task.checkCancellation()
-        let account = cloudAccount(settings: SettingsManager.shared.settings)!
+        prepareFeedbackGeneration()
+        // Publishing the reset can synchronously reenter settings via Combine subscribers.
+        guard generation == SettingsManager.shared.habiticaAccountGeneration,
+              matchesCurrentRequest(request),
+              let account = cloudAccount(settings: SettingsManager.shared.settings) else { throw RequestFailure.staleAccount }
+        requestSequence &+= 1
+        let context = RequestContext(request: request, accountGeneration: generation,
+                                     sequence: requestSequence, errorRevision: errorRevision)
         var budget = requestBudgets[account] ?? HabiticaRequestBudget()
         let delay = budget.reserve(at: ProcessInfo.processInfo.systemUptime)
         requestBudgets[account] = budget
         guard delay <= 0 else {
-            lastError = rateLimitMessage(account: account)
+            publishError(rateLimitMessage(account: account), context: context)
             throw RequestFailure.rateLimited
         }
         let isMutation = (request.httpMethod ?? "GET") != "GET"
@@ -674,8 +765,6 @@ class HabiticaAPI: ObservableObject {
         // Verification after a write must not join a read started before its acknowledgement.
         defer { if isMutation { readGeneration &+= 1 } }
         do {
-            // Atomic dispatch: create and start the data task synchronously before any suspension.
-            // This prevents a race where MainActor state changes between the guard and the network dispatch.
             let (data, response): (Data, URLResponse) = try await withCheckedThrowingContinuation { continuation in
                 let task = session.dataTask(with: request) { data, response, error in
                     if let error = error {
@@ -689,42 +778,49 @@ class HabiticaAPI: ObservableObject {
                 task.resume()
             }
             guard let http = response as? HTTPURLResponse else { throw RequestFailure.invalidResponse }
+            // Server limits belong to the original UID/root, including retired connections.
             var updated = requestBudgets[account] ?? budget
             updated.observe(http, at: ProcessInfo.processInfo.systemUptime, date: Date())
             requestBudgets[account] = updated
-            // Deleting an already absent task is an acknowledged, idempotent success.
             guard (200..<300).contains(http.statusCode) || (request.httpMethod == "DELETE" && http.statusCode == 404) else {
-                await MainActor.run {
-                    guard self.matchesCurrentRequest(request) else { return }
-                    self.lastError = http.statusCode == 429 ? self.rateLimitMessage(account: account)
-                        : (http.statusCode == 401 ? "Habitica 认证失败，请检查 User ID / API Token" : "Habitica 请求失败（HTTP \(http.statusCode)）")
-                    if http.statusCode == 401 { self.isAuthenticated = false }
+                publishError(http.statusCode == 429 ? rateLimitMessage(account: account)
+                    : (http.statusCode == 401 ? "Habitica 认证失败，请检查 User ID / API Token" : "Habitica 请求失败（HTTP \(http.statusCode)）"), context: context)
+                if http.statusCode == 401, isCurrent(context), context.sequence >= latestAuthenticationSequence {
+                    latestAuthenticationSequence = context.sequence
+                    isAuthenticated = false
                 }
                 throw RequestFailure.status(http.statusCode)
             }
-            await MainActor.run {
-                if self.matchesCurrentRequest(request), !updated.received429 { self.lastError = nil }
-            }
-            return (data, response)
+            publishSuccess(context: context, account: account)
+            return (data, response, context)
         } catch {
             if case RequestFailure.invalidResponse = error {
-                if matchesCurrentRequest(request) { lastError = "Habitica 返回了无法识别的响应。" }
+                publishError("Habitica 返回了无法识别的响应。", context: context)
             } else if !(error is RequestFailure) && !(error is CancellationError) {
-                if matchesCurrentRequest(request) { lastError = "网络错误：\(error.localizedDescription)" }
+                publishError("网络错误：\(error.localizedDescription)", context: context)
             }
             throw error
         }
     }
 
     // GET user data
+    @MainActor
     func fetchUserData(settings: UserSettings, silent: Bool = false) async {
+        let generation = SettingsManager.shared.habiticaAccountGeneration
         guard settings.connectHabitica,
               !settings.uid.isEmpty, !settings.apiToken.isEmpty else {
-            await MainActor.run {
-                guard self.matchesCurrentAccount(settings) else { return }
-                self.isAuthenticated = false
-                self.monies = 0; self.exp = 0; self.hp = 0
-                if !silent { self.lastError = settings.connectHabitica ? "Credentials not configured" : nil }
+            guard matchesCurrentAccount(settings) else { return }
+            prepareFeedbackGeneration()
+            isAuthenticated = false
+            monies = 0; exp = 0; hp = 0
+            if !silent {
+                guard generation == SettingsManager.shared.habiticaAccountGeneration,
+                      matchesCurrentAccount(settings) else { return }
+                requestSequence &+= 1
+                latestErrorSequence = requestSequence
+                errorRevision &+= 1
+                lastError = settings.connectHabitica ? "Credentials not configured" : nil
+                if generation != SettingsManager.shared.habiticaAccountGeneration { lastError = nil }
             }
             return
         }
@@ -734,34 +830,40 @@ class HabiticaAPI: ObservableObject {
         req.setValue(HabiticaConsts.xClientHeader, forHTTPHeaderField: "x-client")
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
-
         do {
-            let (data, response) = try await perform(req)
-            guard let http = response as? HTTPURLResponse else { return }
-            if http.statusCode == 401 {
-                await MainActor.run { self.lastError = "Invalid credentials"; self.isAuthenticated = false }
+            let (data, response, context) = try await perform(req)
+            guard isCurrent(context), let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let decoded: Any
+            do { decoded = try JSONSerialization.jsonObject(with: data) }
+            catch {
+                publishError("Habitica 角色响应格式错误。", context: context)
                 return
             }
-            guard http.statusCode == 200 else {
-                await MainActor.run { self.lastError = "Server error: \(http.statusCode)" }
+            guard let json = decoded as? [String: Any], let userData = json["data"] as? [String: Any],
+                  let stats = userData["stats"] as? [String: Any] else {
+                publishError("Habitica 角色响应格式错误。", context: context)
                 return
             }
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let userData = json["data"] as? [String: Any],
-               let stats = userData["stats"] as? [String: Any] {
-                await MainActor.run {
-                    guard self.matchesCurrentAccount(settings) else { return }
-                    self.monies = (stats["gp"] as? Double) ?? 0
-                    self.exp = (stats["exp"] as? Double) ?? 0
-                    self.hp = (stats["hp"] as? Double) ?? 0
-                    self.isAuthenticated = true
-                    // A slower successful profile response must not erase a newer shared 429.
-                    if self.requestBudgets[self.cloudAccount(settings: settings) ?? ""]?.received429 != true {
-                        self.lastError = nil
-                    }
+            guard context.sequence >= latestAuthenticationSequence,
+                  context.sequence >= latestProfileSequence else { return }
+            defer {
+                // Undo an outer @Published setter that finished after a subscriber changed accounts.
+                if !isCurrent(context) {
+                    monies = 0; exp = 0; hp = 0
+                    isAuthenticated = false
                 }
             }
-        } catch { /* perform preserves HTTP/cooldown errors; only a real 401 invalidates credentials. */ }
+            latestProfileSequence = context.sequence
+            latestAuthenticationSequence = context.sequence
+            monies = (stats["gp"] as? Double) ?? 0
+            guard isCurrent(context) else { return }
+            exp = (stats["exp"] as? Double) ?? 0
+            guard isCurrent(context) else { return }
+            hp = (stats["hp"] as? Double) ?? 0
+            guard isCurrent(context) else { return }
+            isAuthenticated = true
+            // Transport already handled feedback ordering. Parsing must not clear it again.
+        } catch { /* Preserve transport errors; only an actual current 401 invalidates credentials. */ }
     }
 
     // Score a habit up/down
@@ -778,7 +880,7 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let d = json["data"] as? [String: Any] {
@@ -833,11 +935,12 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, context) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let d = json["data"] as? [String: Any] {
-                return d["id"] as? String
+                let id = d["id"] as? String
+                return await MainActor.run { self.isCurrent(context) ? id : nil }
             }
         } catch { throw error }
         return nil
@@ -856,7 +959,7 @@ class HabiticaAPI: ObservableObject {
         let body: [String: Any] = ["text": text, "type": "habit", "alias": alias, "notes": notes, "priority": priority]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return nil }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let d = json["data"] as? [String: Any] {
@@ -895,7 +998,7 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, context) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let tags = json["data"] as? [[String: Any]] {
@@ -905,7 +1008,8 @@ class HabiticaAPI: ObservableObject {
                         result[id] = name
                     }
                 }
-                return result
+                let tags = result
+                return await MainActor.run { self.isCurrent(context) ? tags : nil }
             }
         } catch { return nil }
         return nil
@@ -925,7 +1029,7 @@ class HabiticaAPI: ObservableObject {
         let body: [String: Any] = ["name": name]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return nil }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let d = json["data"] as? [String: Any] {
@@ -959,7 +1063,7 @@ class HabiticaAPI: ObservableObject {
         let body: [String: Any] = ["name": name]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            let (_, response) = try await perform(req)
+            let (_, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse else { return false }
             return http.statusCode == 200
         } catch { return false }
@@ -991,7 +1095,7 @@ class HabiticaAPI: ObservableObject {
         let body: [String: Any] = ["text": text, "type": "todo", "notes": notes, "tags": tagIds]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 201 || http.statusCode == 200 else { return .uncertain }
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let d = json["data"] as? [String: Any],
@@ -1032,7 +1136,7 @@ class HabiticaAPI: ObservableObject {
         if let notes = notes { body["notes"] = notes }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            let (_, response) = try await perform(req)
+            let (_, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse else { return false }
             return http.statusCode == 200
         } catch { return false }
@@ -1060,7 +1164,7 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (_, response) = try await perform(req)
+            let (_, response, _) = try await perform(req)
             guard let http = response as? HTTPURLResponse else { return false }
             return http.statusCode == 200 || http.statusCode == 404
         } catch { return false }
@@ -1076,6 +1180,7 @@ class HabiticaAPI: ObservableObject {
 
     func fetchTopThreeTodos(settings: UserSettings) async -> [CloudTodo]? {
         guard settings.connectHabitica, !settings.uid.isEmpty, !settings.apiToken.isEmpty else { return nil }
+        guard let generation = await connectionGeneration(settings: settings) else { return nil }
         var result: [CloudTodo] = []
         for kind in ["todos", "completedTodos"] {
             guard let url = endpoint(path: "tasks/user?type=\(kind)", settings: settings) else { return nil }
@@ -1084,9 +1189,15 @@ class HabiticaAPI: ObservableObject {
             request.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
             request.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
             do {
-                let (data, _) = try await perform(request)
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let entries = json["data"] as? [[String: Any]] else { reportError("Habitica todo 响应格式错误", settings: settings); return nil }
+                let (data, _, context) = try await perform(request, accountGeneration: generation)
+                let decoded: Any
+                do { decoded = try JSONSerialization.jsonObject(with: data) }
+                catch {
+                    reportError("Habitica todo 响应格式错误", settings: settings, context: context)
+                    return nil
+                }
+                guard let json = decoded as? [String: Any],
+                      let entries = json["data"] as? [[String: Any]] else { reportError("Habitica todo 响应格式错误", settings: settings, context: context); return nil }
                 result += entries.compactMap { item in
                     guard let id = item["id"] as? String, let title = item["text"] as? String else { return nil }
                     return CloudTodo(id: id, title: title, notes: item["notes"] as? String ?? "",
@@ -1094,7 +1205,10 @@ class HabiticaAPI: ObservableObject {
                 }
             } catch { return nil }
         }
-        return result
+        let todos = result
+        return await MainActor.run {
+            generation == SettingsManager.shared.habiticaAccountGeneration && self.matchesCurrentAccount(settings) ? todos : nil
+        }
     }
 
     // MARK: - Task Lists (habits / dailies)
@@ -1115,16 +1229,16 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, context) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             let decoded: Any
             do { decoded = try JSONSerialization.jsonObject(with: data) }
             catch {
-                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings, context: context)
                 return nil
             }
             guard let json = decoded as? [String: Any], let arr = json["data"] as? [[String: Any]] else {
-                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings, context: context)
                 return nil
             }
             var items: [HabiticaTaskItem] = []
@@ -1132,7 +1246,7 @@ class HabiticaAPI: ObservableObject {
             for t in arr {
                 guard let id = t["id"] as? String, !id.isEmpty, ids.insert(id).inserted,
                       let text = t["text"] as? String else {
-                    reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings)
+                    reportError("Habitica 任务列表响应格式错误，已保留上次加载的数据。", settings: settings, context: context)
                     return nil
                 }
                 let notes = t["notes"] as? String ?? ""
@@ -1149,7 +1263,8 @@ class HabiticaAPI: ObservableObject {
                 items.append(HabiticaTaskItem(id: id, text: text, notes: notes, value: value,
                                              completed: completed, canUp: canUp, canDown: canDown, isDue: isDue))
             }
-            return items
+            let parsed = items
+            return await MainActor.run { self.isCurrent(context) ? parsed : nil }
         } catch {
             return nil
         }
@@ -1173,11 +1288,12 @@ class HabiticaAPI: ObservableObject {
         req.setValue(settings.uid, forHTTPHeaderField: "x-api-user")
         req.setValue(settings.apiToken, forHTTPHeaderField: "x-api-key")
         do {
-            let (data, response) = try await perform(req)
+            let (data, response, context) = try await perform(req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let d = json["data"] as? [String: Any] else { return nil }
-            return parseProfile(d)
+            let parsed = parseProfile(d)
+            return await MainActor.run { self.isCurrent(context) ? parsed : nil }
         } catch { return nil }
     }
 

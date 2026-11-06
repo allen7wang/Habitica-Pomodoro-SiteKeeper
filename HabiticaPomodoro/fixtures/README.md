@@ -17,6 +17,7 @@ python3 HabiticaPomodoro/fixtures/run.py --only qishi_audio
 python3 HabiticaPomodoro/fixtures/run.py --only foreground_recovery --only dirty_reload
 python3 HabiticaPomodoro/fixtures/run.py --only habitica_rate_limit --only habitica_sync_budget
 python3 HabiticaPomodoro/fixtures/run.py --only habitica_create_recovery --only habitica_task_lists
+python3 HabiticaPomodoro/fixtures/run.py --only habitica_account_epoch --only habitica_response_order --only habitica_dispatch_reentry
 ```
 
 The work-directory base is `--work`, then `HERMES_SCRATCH`, then `TMPDIR`.
@@ -126,8 +127,9 @@ per-case commands.
 
 ## Isolation and limits
 
-`habitica_rate_limit`, `habitica_sync_budget`, `habitica_create_recovery`, and
-`habitica_task_lists` compile the real API, request budget, and Top3 synchronization
+`habitica_rate_limit`, `habitica_sync_budget`, `habitica_create_recovery`,
+`habitica_task_lists`, `habitica_account_epoch`, `habitica_response_order`, and
+`habitica_dispatch_reentry` compile the real API, request budget, and Top3 synchronization
 code with `habitica_transport.swift`. Its `URLProtocol`
 intercepts **every** request; settings, tokens, owners, responses and persisted data
 are synthetic and remain under the runner's isolated directories. No real account
@@ -152,6 +154,16 @@ Task-list cases distinguish a valid empty list from malformed JSON, invalid rows
 duplicate IDs, HTTP and network failures. A successful list remains available
 even when another request has a shared error. The fixtures exercise API results;
 Mac/iOS view adoption is additionally checked by source review and compilation.
+Connection-epoch cases cover A-B-A without a request on B, token/root/off-on
+cycles, unchanged preferences and equivalent roots, discarded old reads and
+profile/error/authentication state, preserved UID/root budgets, real outcomes
+of sent POSTs, retired 429 responses and two-leg Top3 reads. Response-order cases
+cover slower successes versus later HTTP/network/parsing errors, newer error
+precedence, later 401 authentication and a genuinely new successful refresh.
+Reentry cases use synchronous Combine subscribers to change settings while
+feedback/profile values publish; retired requests must not dispatch, and retired
+profile values/errors must not remain in the new account. These are real
+production publishers and intercepted transports, not rewritten API methods.
 
 Before any manager initializes, the generated preflight verifies Foundation's
 home and Documents paths under the case's fresh `CFFIXED_USER_HOME` and sets

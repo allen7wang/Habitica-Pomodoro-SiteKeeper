@@ -1,14 +1,14 @@
 # 桌面与移动端功能对齐验收清单
 
-> macOS、iOS、Android 的业务功能与记录规则对齐，不要求机械复制桌面布局。macOS 2.0 起新增专注复盘，2.1 起新增跨天未完成任务，2.1.2 更新 Habitica 请求限流与删除确认，2.1.3 修复创建被拒后的恢复与异常列表响应；这些新增界面尚未全部对齐移动端。iOS / Android 发行版本仍为 v1.2.5。本文保留历次记录，旧日期的“尚未发布/待修”不代表现状，也**不是所有人工项已通过的声明**。不含手表端。
+> macOS、iOS、Android 的业务功能与记录规则对齐，不要求机械复制桌面布局。macOS 2.0 起新增专注复盘，2.1 起新增跨天未完成任务，2.1.2 更新 Habitica 请求限流与删除确认，2.1.3 修复创建被拒后的恢复与异常列表响应，2.1.4 修复并发响应与账号切换；这些新增界面尚未全部对齐移动端。iOS / Android 发行版本仍为 v1.2.5。本文保留历次记录，旧日期的“尚未发布/待修”不代表现状，也**不是所有人工项已通过的声明**。不含手表端。
 
 ## 当前状态索引（2026-11-07）
 
 | 状态 | 范围与边界 |
 |---|---|
-| 发布版本 | Mac `v2.1.3`，详见[更新说明](releases/v2.1.3.md)；iOS `v1.2.5-ios` 未签名 IPA、Android `v1.2.5-android` APK |
-| 已安装 Mac | 上轮核对为 2.1.1/build 15；本次提供 2.1.3/build 17 安装包，未替换或重启本机应用 |
-| 本次变更 | macOS 2.1.3 与 Widget 同升 build 17；修复明确未创建的任务无法重试及其删除/账号切换标记清理，习惯和每日加载失败保留旧列表 |
+| 发布版本 | Mac `v2.1.4`，详见[更新说明](releases/v2.1.4.md)；iOS `v1.2.5-ios` 未签名 IPA、Android `v1.2.5-android` APK |
+| 已安装 Mac | 此前核对为 2.1.1/build 15；本次提供 2.1.4/build 18 安装包，未替换或重启本机应用 |
+| 本次变更 | macOS 2.1.4 与 Widget 同升 build 18；请求携带连接代次与反馈顺序，修复并发错误/认证和账号切回后的旧读取复用；CI 改用 Intel macOS 执行器与明确 Xcode 版本 |
 | 待验收 | 长时间日常使用、真实音频/锁屏后台、Habitica 在线及账号切换、iCloud 跨设备系统传送；Android 无设备暂缓真机 |
 | 回归入口 | [Apple fixtures](fixtures/README.md)、[Android fixtures](../HabiticaPomodoroAndroid/fixtures/README.md)；离线绿不等于设备或线上绿 |
 
@@ -183,3 +183,15 @@
 - Apple 全量离线回归 **11 cases / 173 assertions PASS**，全部生产源码、案例和 helper 快照与最终源码一致。新增创建恢复 17 项、列表保护 15 项；限流 24 项实际覆盖慢 200 与先到 429，并修正整数边界浮点舍入导致的过严提示断言。
 - macOS 主程序及 Widget arm64+x86_64 构建、iOS Simulator 兼容编译通过。DMG 挂载核对两者均为 2.1.3/17、Universal、deep/strict 签名通过，JSON 仅含公共栖时场景清单。DMG SHA-256 `c72ebd018ee30594f5b3c4484ea557f76228238872164cc605669676347e4261`；主程序 SHA-256 `18fc1ebf02ac0aa426f43f7a4bcf9cf2a14c95ba8f38039611d14f0096ed03ad`。
 - 边界：旧版本遗留且无法确认结果的创建标记不自动清除；各功能仍共用错误提示，其它成功请求可能更新提示。真实 Habitica 在线、UI/设备交互、音频与 iCloud 跨设备未在本轮验收，Android 未重新构建。
+
+## v2.1.4 发布记录（2026-11-07，macOS）
+
+- 主程序和今日任务 Widget 同升 **2.1.4/build 18**；iOS / Android 发行版本仍为 1.2.5，本机应用未替换或重启。
+- SettingsManager 仅在有效连接身份改变时同步递增内存代次，A→B→A 即使 B 未请求也会失效旧读取；普通偏好和等价 API 地址不递增。代次不写入数据文件，不触发 API 初始化。
+- 读取合并键、派发校验、返回数据、解析错误与角色状态均携带原连接代次。Top3 两次 GET 固定同一代次；旧响应不能被新连接采用。已派发写请求仍保留实际结果，旧响应仍更新原 UID/API root 的预算，切换连接不会绕过冷却。
+- 请求记录派发时的错误修订号及序号，较慢成功不清除后来发生的 HTTP/网络/解析错误，旧错误不替换新错误；角色更新不再二次清错，较旧成功不能撤销较新 401。
+- 同步 Combine 发布可能重入设置：派发前反馈重置后再次校验身份；角色字段发布后若连接退役则停止并清零旧状态，旧错误发布后若退役则撤销。新增回归以真实 publisher 同步切换账号验证。
+- Apple 全量 **14 cases / 224 assertions PASS**，142 次生产源码、案例与 helper 指纹比较一致。新增账号代次 23 项、响应顺序 10 项、发布重入 18 项。旧 API 的 A→B→A 与 8 个响应顺序失败已隔离复现。
+- macOS 主程序与 Widget 双架构构建、iOS Simulator 兼容编译通过。挂载 DMG 核对版本 2.1.4/18、Universal、deep/strict 签名通过，JSON 仅公共栖时场景清单。DMG SHA-256 `eac504ebfe2ca54af9f0ad8a40e041553daabcabe444397f24d594c3a9425bc2`；主程序 SHA-256 `4684ffeb421ee2273967ffb1053b07bba9ff29cbefa51e9669bd4f67f0a6e444`。
+- 此前 v2.1.2 两次远端 Apple 任务因未取得 hosted macOS arm64 执行器而排队超时，均未运行步骤；Android 两次均成功。本轮改用标准 `macos-15-intel`，明确 `DEVELOPER_DIR` 为 Xcode 26.3，双架构脚本不变；标签与工具链已按 [GitHub 标准执行器](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories) 及 [镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md#xcode) 核对，远端结果以 Actions 记录为准。
+- 边界：各功能仍共享错误提示；旧结果不明的创建标记不自动重放或清除。真实账号在线、UI/设备、声音与 iCloud 跨设备未在本轮验收；本地没有重建 Android 安装包。

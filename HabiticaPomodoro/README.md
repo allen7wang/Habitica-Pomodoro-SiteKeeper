@@ -9,12 +9,14 @@ macOS / iOS 客户端在本机统一管理各功能的 Habitica 请求额度：�
 新建任务若在派发前被阻止，或收到 HTTP 401/429 明确拒绝，会保留本机任务并释放本次创建标记，修正凭据或冷却结束后可手动同步重试。
 已派发但因断网、超时或异常响应而无法确认结果的创建仍先核对云端，避免重复创建；旧版本留下且无法判定结果的标记不会自动清除。
 习惯和每日任务的加载失败与合法空列表分开处理，异常响应不再清空已显示的列表。
+并发请求按原连接和反馈顺序处理：较慢的成功响应不清除后来报告的错误，旧角色响应不覆盖较新的认证失败。
+账号、Token、连接开关或有效 API 地址改变后，旧读取不能再被复用或提交；切回同一账号也会重新读取，原账号的请求限额仍然保留。
 
 基于 [ofekmiz/Habitica-Pomodoro-SiteKeeper](https://github.com/ofekmiz/Habitica-Pomodoro-SiteKeeper) Chrome 扩展的 macOS 原生重制与增强版。
 
 **Mac ↔ iPhone 数据同步**：Mac 与 iPhone 登录同一 Apple ID 并在 iOS 授权 iCloud Drive 文件夹后，读写 `Documents/.habitica-pomodoro/` 中的七类 JSON 数据文件。系统负责跨设备传送，同时编辑仍可能最后写入覆盖。Android 无法读取该 iCloud 目录，只经 Habitica todo 导入已上传、带应用日期与分类标记的 Top 3 任务；纯本地任务、设置及历史不通过 Habitica 同步。
 
-> **版本状态**：macOS **[v2.1.3（build 17）](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v2.1.3)** 修复新建任务被拒绝后的上传重试、删除与账号切换期间的创建标记清理，以及异常响应清空习惯/每日列表的问题。若 macOS 重新询问访问权限，请为 Habitica Pomodoro 允许「文稿」访问。iOS / Android 的发行版本为 v1.2.5。
+> **版本状态**：macOS **[v2.1.4（build 18）](https://github.com/allen7wang/Habitica-Pomodoro-SiteKeeper/releases/tag/v2.1.4)** 修复并发错误提示、认证响应顺序及切换账号后复用旧读取的问题，并保留之前的上传恢复与列表保护。若 macOS 重新询问访问权限，请为 Habitica Pomodoro 允许「文稿」访问。iOS / Android 的发行版本为 v1.2.5。
 
 ## 功能特性
 

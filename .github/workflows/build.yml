@@ -21,7 +21,11 @@ defaults:
 
 jobs:
   apple:
-    runs-on: macos-15
+    # The arm64 macos-15 pool can time out before acquiring a runner.
+    # Build both app architectures on the standard Intel pool with an explicit Xcode.
+    runs-on: macos-15-intel
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
